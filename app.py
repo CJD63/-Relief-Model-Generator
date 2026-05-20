@@ -318,6 +318,22 @@ if 'crop_right' not in st.session_state:
     st.session_state.crop_right = 100
 if 'comparison_mode' not in st.session_state:
     st.session_state.comparison_mode = 'slider'
+if 'batch_presets' not in st.session_state:
+    st.session_state.batch_presets = {
+        'default': {
+            'preset': 'preview',
+            'keep_colors': False,
+            'invert_colors': False,
+            'edge_detection': False,
+            'edge_strength': 1.0,
+            'model_width': 50.0,
+            'model_thickness': 5.0,
+            'base_thickness': 2.0,
+            'filename_pattern': '{name}_{preset}'
+        }
+    }
+if 'current_batch_preset_name' not in st.session_state:
+    st.session_state.current_batch_preset_name = 'default'
 
 
 # HEADER
@@ -881,12 +897,65 @@ with tab_batch:
     if batch_files:
         st.write('📁 **' + str(len(batch_files)) + ' images selected**')
     
+    # Batch Preset Templates
+    st.markdown('##### 📁 Batch Presets')
+    preset_load_col, preset_save_col, preset_del_col = st.columns([2, 1, 1])
+    with preset_load_col:
+        batch_preset_options = list(st.session_state.batch_presets.keys())
+        selected_batch_preset = st.selectbox('Load Preset', batch_preset_options,
+            index=batch_preset_options.index(st.session_state.current_batch_preset_name) if st.session_state.current_batch_preset_name in batch_preset_options else 0,
+            key='batch_preset_selector')
+        if selected_batch_preset != st.session_state.current_batch_preset_name:
+            st.session_state.current_batch_preset_name = selected_batch_preset
+            bp = st.session_state.batch_presets[selected_batch_preset]
+            # Update all widget session state values to match loaded preset
+            st.session_state.batch_preset = bp.get('preset', 'preview')
+            st.session_state.batch_keep_colors = bp.get('keep_colors', False)
+            st.session_state.batch_invert_colors = bp.get('invert_colors', False)
+            st.session_state.batch_edge_detection = bp.get('edge_detection', False)
+            st.session_state.batch_edge_strength = bp.get('edge_strength', 1.0)
+            st.session_state.batch_model_width = bp.get('model_width', 50.0)
+            st.session_state.batch_model_thickness = bp.get('model_thickness', 5.0)
+            st.session_state.batch_base_thickness = bp.get('base_thickness', 2.0)
+            st.session_state.batch_filename_pattern = bp.get('filename_pattern', '{name}_{preset}')
+            st.rerun()
+    with preset_save_col:
+        save_batch_preset_name = st.text_input('Save as', value='', placeholder='preset name', key='save_batch_preset_name')
+    with preset_del_col:
+        if st.button('💾 Save Preset', key='save_batch_preset_btn', disabled=not save_batch_preset_name.strip()):
+            name = save_batch_preset_name.strip()
+            st.session_state.batch_presets[name] = {
+                'preset': st.session_state.get('batch_preset', 'preview'),
+                'keep_colors': st.session_state.get('batch_keep_colors', False),
+                'invert_colors': st.session_state.get('batch_invert_colors', False),
+                'edge_detection': st.session_state.get('batch_edge_detection', False),
+                'edge_strength': st.session_state.get('batch_edge_strength', 1.0),
+                'model_width': st.session_state.get('batch_model_width', 50.0),
+                'model_thickness': st.session_state.get('batch_model_thickness', 5.0),
+                'base_thickness': st.session_state.get('batch_base_thickness', 2.0),
+                'filename_pattern': st.session_state.get('batch_filename_pattern', '{name}_{preset}')
+            }
+            st.session_state.current_batch_preset_name = name
+            st.rerun()
+    
+    delete_batch_preset = st.selectbox('🗑️ Delete Preset', ['(none)'] + [p for p in st.session_state.batch_presets.keys() if p != 'default'], key='delete_batch_preset_selector')
+    if delete_batch_preset != '(none)':
+        if st.button('🗑️ Delete', key='delete_batch_preset_btn'):
+            del st.session_state.batch_presets[delete_batch_preset]
+            if st.session_state.current_batch_preset_name == delete_batch_preset:
+                st.session_state.current_batch_preset_name = 'default'
+            st.rerun()
+    
+    # Get current preset values
+    current_bp = st.session_state.batch_presets.get(st.session_state.current_batch_preset_name, st.session_state.batch_presets['default'])
+    
     # Output Options
     st.markdown('##### Output Options')
     filename_pattern = st.text_input(
         'Filename Pattern',
-        value='{name}_{preset}',
-        help='Placeholders: {name}, {preset}, {index}, {date}, {timestamp}, {width}, {height}. Must include {name} or {index} for unique filenames.'
+        value=current_bp.get('filename_pattern', '{name}_{preset}'),
+        help='Placeholders: {name}, {preset}, {index}, {date}, {timestamp}, {width}, {height}. Must include {name} or {index} for unique filenames.',
+        key='batch_filename_pattern'
     )
     
     # Validate filename pattern only when files are selected
@@ -895,17 +964,19 @@ with tab_batch:
         st.error('Pattern must include {name} or {index} for unique filenames')
     
     st.markdown('##### Model Settings')
-    batch_preset = st.selectbox('Quality Preset', ['draft', 'preview', 'high'], index=1, key='batch_preset')
-    batch_keep_colors = st.checkbox('🎨 Keep Original Colors', value=False, key='batch_keep_colors',
+    batch_preset = st.selectbox('Quality Preset', ['draft', 'preview', 'high'], 
+        index=['draft', 'preview', 'high'].index(current_bp.get('preset', 'preview')),
+        key='batch_preset')
+    batch_keep_colors = st.checkbox('🎨 Keep Original Colors', value=current_bp.get('keep_colors', False), key='batch_keep_colors',
         help='Keep original colors instead of converting to grayscale')
-    batch_invert_colors = st.checkbox('🔄 Invert Colors (Black ↔ White)', value=False, key='batch_invert_colors',
+    batch_invert_colors = st.checkbox('🔄 Invert Colors (Black ↔ White)', value=current_bp.get('invert_colors', False), key='batch_invert_colors',
         help='Swap black and white in all images')
-    batch_edge_detection = st.checkbox('🔍 Enable Edge Detection', value=False, key='batch_edge_detection')
-    batch_edge_strength = st.slider('Edge Strength', 0.1, 2.0, 1.0, 0.1, key='batch_edge_strength') if batch_edge_detection else 1.0
+    batch_edge_detection = st.checkbox('🔍 Enable Edge Detection', value=current_bp.get('edge_detection', False), key='batch_edge_detection')
+    batch_edge_strength = st.slider('Edge Strength', 0.1, 2.0, current_bp.get('edge_strength', 1.0), 0.1, key='batch_edge_strength') if batch_edge_detection else 1.0
     
-    batch_model_width = st.slider('Model Width (mm)', 10.0, 200.0, 50.0, 5.0, key='batch_model_width')
-    batch_model_thickness = st.slider('Relief Height (mm)', 1.0, 20.0, 5.0, 0.5, key='batch_model_thickness')
-    batch_base_thickness = st.slider('Base Thickness (mm)', 0.5, 10.0, 2.0, 0.5, key='batch_base_thickness')
+    batch_model_width = st.slider('Model Width (mm)', 10.0, 200.0, current_bp.get('model_width', 50.0), 5.0, key='batch_model_width')
+    batch_model_thickness = st.slider('Relief Height (mm)', 1.0, 20.0, current_bp.get('model_thickness', 5.0), 0.5, key='batch_model_thickness')
+    batch_base_thickness = st.slider('Base Thickness (mm)', 0.5, 10.0, current_bp.get('base_thickness', 2.0), 0.5, key='batch_base_thickness')
     
     preset_info = {
         'draft': {'max_size': 150, 'blur': 0.3, 'gamma': 1.0, 'smoothing': True, 'hill': 3.0},
