@@ -60,28 +60,33 @@ class STLExporter:
         return stl_data
 
     def _add_surface_triangles(self, stl_data, offset, vertices, width, height, pixel_size, base_thickness):
+        """Add triangles for the top surface of the relief mesh.
+        
+        Each quad from (y,x) to (y+1,x+1) produces 2 triangles forming the surface.
+        The Y coordinates are calculated with Y=0 at bottom, increasing upward.
+        """
         w = width - 1
         h = height - 1
 
         for y in range(h):
             for x in range(w):
-                z00 = vertices[y, x, 2]
-                z01 = vertices[y, x + 1, 2]
-                z10 = vertices[y + 1, x, 2]
-                z11 = vertices[y + 1, x + 1, 2]
+                # Get Z values from vertices array (shape: height, width, 3)
+                z00 = float(vertices[y, x, 2])
+                z01 = float(vertices[y, x + 1, 2])
+                z10 = float(vertices[y + 1, x, 2])
+                z11 = float(vertices[y + 1, x + 1, 2])
 
-                x0 = x * pixel_size
-                x1 = (x + 1) * pixel_size
-                y0 = (height - y - 1) * pixel_size
-                y1 = (height - y - 2) * pixel_size
+                x0 = float(x) * pixel_size
+                x1 = float(x + 1) * pixel_size
+                y_bottom = float(height - 1 - y) * pixel_size
+                y_top = float(height - 2 - y) * pixel_size
 
-                base0 = base_thickness
-                base1 = base_thickness
-
-                v1 = (x0, y0, base0)
-                v2 = (x0, y0, z00)
-                v3 = (x1, y0, z01)
+                # Triangle 1: (y,x) -> (y+1,x) -> (y+1,x+1)
+                v1 = (x0, y_bottom, z00)
+                v2 = (x0, y_top, z10)
+                v3 = (x1, y_top, z11)
                 normal = self._calculate_normal(v1, v2, v3)
+                
                 struct.pack_into("<fff", stl_data, offset, *normal)
                 offset += 12
                 struct.pack_into("<fff", stl_data, offset, *v1)
@@ -90,11 +95,15 @@ class STLExporter:
                 offset += 12
                 struct.pack_into("<fff", stl_data, offset, *v3)
                 offset += 12
+                struct.pack_into('<H', stl_data, offset, 0)  # attribute bytes
+                offset += 2
 
-                v1 = (x0, y0, base0)
-                v2 = (x1, y0, z01)
-                v3 = (x1, y0, base0)
+                # Triangle 2: (y,x) -> (y+1,x+1) -> (y,x+1)
+                v1 = (x0, y_bottom, z00)
+                v2 = (x1, y_top, z11)
+                v3 = (x1, y_bottom, z01)
                 normal = self._calculate_normal(v1, v2, v3)
+                
                 struct.pack_into("<fff", stl_data, offset, *normal)
                 offset += 12
                 struct.pack_into("<fff", stl_data, offset, *v1)
@@ -103,6 +112,8 @@ class STLExporter:
                 offset += 12
                 struct.pack_into("<fff", stl_data, offset, *v3)
                 offset += 12
+                struct.pack_into('<H', stl_data, offset, 0)  # attribute bytes
+                offset += 2
 
         return offset
 
@@ -118,6 +129,7 @@ class STLExporter:
             x1 = (x + 1) * pixel_size
             y0 = 0.0
 
+            # Triangle 1
             struct.pack_into("<fff", stl_data, offset, *normal)
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y0, base_thickness)
@@ -126,7 +138,10 @@ class STLExporter:
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x1, y0, z2)
             offset += 12
+            struct.pack_into('<H', stl_data, offset, 0)
+            offset += 2
 
+            # Triangle 2
             struct.pack_into("<fff", stl_data, offset, *normal)
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y0, base_thickness)
@@ -135,6 +150,8 @@ class STLExporter:
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x1, y0, base_thickness)
             offset += 12
+            struct.pack_into('<H', stl_data, offset, 0)
+            offset += 2
 
         normal = (0.0, 1.0, 0.0)
         for x in range(w - 1):
@@ -144,6 +161,7 @@ class STLExporter:
             x1 = (x + 1) * pixel_size
             y0 = (height - 1) * pixel_size
 
+            # Triangle 1
             struct.pack_into("<fff", stl_data, offset, *normal)
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y0, base_thickness)
@@ -152,7 +170,10 @@ class STLExporter:
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y0, z1)
             offset += 12
+            struct.pack_into('<H', stl_data, offset, 0)
+            offset += 2
 
+            # Triangle 2
             struct.pack_into("<fff", stl_data, offset, *normal)
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y0, base_thickness)
@@ -161,6 +182,8 @@ class STLExporter:
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x1, y0, z2)
             offset += 12
+            struct.pack_into('<H', stl_data, offset, 0)
+            offset += 2
 
         normal = (-1.0, 0.0, 0.0)
         for y in range(h - 1):
@@ -169,6 +192,7 @@ class STLExporter:
             y0 = (height - y - 1) * pixel_size
             y1 = (height - y - 2) * pixel_size
 
+            # Triangle 1
             struct.pack_into("<fff", stl_data, offset, *normal)
             offset += 12
             struct.pack_into("<fff", stl_data, offset, 0.0, y0, base_thickness)
@@ -177,7 +201,10 @@ class STLExporter:
             offset += 12
             struct.pack_into("<fff", stl_data, offset, 0.0, y1, z2)
             offset += 12
+            struct.pack_into('<H', stl_data, offset, 0)
+            offset += 2
 
+            # Triangle 2
             struct.pack_into("<fff", stl_data, offset, *normal)
             offset += 12
             struct.pack_into("<fff", stl_data, offset, 0.0, y0, base_thickness)
@@ -186,6 +213,8 @@ class STLExporter:
             offset += 12
             struct.pack_into("<fff", stl_data, offset, 0.0, y1, base_thickness)
             offset += 12
+            struct.pack_into('<H', stl_data, offset, 0)
+            offset += 2
 
         normal = (1.0, 0.0, 0.0)
         for y in range(h - 1):
@@ -195,6 +224,7 @@ class STLExporter:
             y1 = (height - y - 2) * pixel_size
             x0 = (width - 1) * pixel_size
 
+            # Triangle 1
             struct.pack_into("<fff", stl_data, offset, *normal)
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y0, base_thickness)
@@ -203,7 +233,10 @@ class STLExporter:
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y0, z1)
             offset += 12
+            struct.pack_into('<H', stl_data, offset, 0)
+            offset += 2
 
+            # Triangle 2
             struct.pack_into("<fff", stl_data, offset, *normal)
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y0, base_thickness)
@@ -212,6 +245,8 @@ class STLExporter:
             offset += 12
             struct.pack_into("<fff", stl_data, offset, x0, y1, z2)
             offset += 12
+            struct.pack_into('<H', stl_data, offset, 0)
+            offset += 2
 
         return offset
 
@@ -228,6 +263,7 @@ class STLExporter:
                 y0 = (height - y - 1) * pixel_size
                 y1 = (height - y - 2) * pixel_size
 
+                # Triangle 1
                 struct.pack_into("<fff", stl_data, offset, *normal)
                 offset += 12
                 struct.pack_into("<fff", stl_data, offset, x0, y0, base_thickness)
@@ -236,7 +272,10 @@ class STLExporter:
                 offset += 12
                 struct.pack_into("<fff", stl_data, offset, x1, y1, base_thickness)
                 offset += 12
+                struct.pack_into('<H', stl_data, offset, 0)
+                offset += 2
 
+                # Triangle 2
                 struct.pack_into("<fff", stl_data, offset, *normal)
                 offset += 12
                 struct.pack_into("<fff", stl_data, offset, x0, y0, base_thickness)
@@ -245,6 +284,8 @@ class STLExporter:
                 offset += 12
                 struct.pack_into("<fff", stl_data, offset, x0, y1, base_thickness)
                 offset += 12
+                struct.pack_into('<H', stl_data, offset, 0)
+                offset += 2
 
         return offset
 
@@ -252,18 +293,20 @@ class STLExporter:
     def _calculate_normal(v1: Tuple[float, float, float],
                           v2: Tuple[float, float, float],
                           v3: Tuple[float, float, float]) -> Tuple[float, float, float]:
-        ax = v2[0] - v1[0]
-        ay = v2[1] - v1[1]
-        az = v2[2] - v1[2]
-        bx = v3[0] - v1[0]
-        by = v3[1] - v1[1]
-        bz = v3[2] - v1[2]
+        ax = float(v2[0]) - float(v1[0])
+        ay = float(v2[1]) - float(v1[1])
+        az = float(v2[2]) - float(v1[2])
+        bx = float(v3[0]) - float(v1[0])
+        by = float(v3[1]) - float(v1[1])
+        bz = float(v3[2]) - float(v1[2])
 
         nx = ay * bz - az * by
         ny = az * bx - ax * bz
         nz = ax * by - ay * bx
 
-        length = (nx * nx + ny * ny + nz * nz) ** 0.5
-        if length > 0.0:
+        length_sq = nx * nx + ny * ny + nz * nz
+        if length_sq > 1e-10:
+            length = length_sq ** 0.5
             return (nx / length, ny / length, nz / length)
+        # Fallback normal for degenerate triangles (very small or collinear)
         return (0.0, 0.0, 1.0)

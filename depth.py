@@ -78,7 +78,8 @@ class DepthMapGenerator:
     def get_depth_map_image(self):
         if self._depth_map is None:
             raise RuntimeError('No depth map. Call create_depth_map first.')
-        return cv2.cvtColor(self._depth_map, cv2.COLOR_GRAY2RGB)
+        # Return as 2D grayscale for PIL compatibility (e.g., Image.fromarray expects 2D for 'L' mode)
+        return self._depth_map
 
     def _bilateral_filter(self, img, radius):
         d = max(1, int(radius * 2))

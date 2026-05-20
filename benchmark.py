@@ -122,11 +122,8 @@ def benchmark_gradient_limiting_comparison(sizes=[100, 200, 500]):
         # Benchmark NEW vectorized version
         times_new = []
         for _ in range(3):
-            gen2 = DepthMapGenerator()
-            gen2._image = np.zeros((size, size, 3), dtype=np.uint8)
-            gen2._height, gen2._width = size, size
             start = time.perf_counter()
-            gen2._gradient_limiting(img.copy(), 6)
+            DepthMapGenerator()._gradient_limiting(img.copy(), 6)
             elapsed = time.perf_counter() - start
             times_new.append(elapsed)
         avg_new = sum(times_new) / len(times_new)
