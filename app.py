@@ -157,6 +157,9 @@ def download_image_from_url(url: str):
         r = requests.get(url, headers=headers, timeout=30)
         r.raise_for_status()
         image = Image.open(BytesIO(r.content))
+        # Convert to grayscale
+        if image.mode != 'L':
+            image = image.convert('L')
         return image, None
     except requests.exceptions.Timeout:
         return None, 'Timeout error: The request took too long. Please check the URL.'
@@ -178,6 +181,9 @@ def get_image(uploaded_file, url_input: str):
         try:
             image = Image.open(uploaded_file)
             image.load()
+            # Convert to grayscale
+            if image.mode != 'L':
+                image = image.convert('L')
             return image, None
         except IOError as e:
             return None, 'Invalid or corrupted image file: ' + str(e)
@@ -186,16 +192,58 @@ def get_image(uploaded_file, url_input: str):
     return None, 'Please upload an image or enter a URL.'
 
 
+def apply_image_adjustments(image, brightness=0, contrast=0, saturation=0, sharpness=0):
+    """Apply brightness, contrast, saturation, and sharpness adjustments to an image.
+    
+    Args:
+        image: PIL Image
+        brightness: -100 to 100 (0 = no change)
+        contrast: -100 to 100 (0 = no change)
+        saturation: -100 to 100 (0 = no change)
+        sharpness: -100 to 100 (0 = no change)
+    
+    Returns:
+        Adjusted PIL Image
+    """
+    from PIL import ImageEnhance
+    
+    # Apply brightness
+    if brightness != 0:
+        factor = 1.0 + (brightness / 100.0)
+        enhancer = ImageEnhance.Brightness(image)
+        image = enhancer.enhance(max(0.0, factor))
+    
+    # Apply contrast
+    if contrast != 0:
+        factor = 1.0 + (contrast / 100.0)
+        enhancer = ImageEnhance.Contrast(image)
+        image = enhancer.enhance(max(0.0, factor))
+    
+    # Apply saturation
+    if saturation != 0:
+        factor = 1.0 + (saturation / 100.0)
+        enhancer = ImageEnhance.Color(image)
+        image = enhancer.enhance(max(0.0, factor))
+    
+    # Apply sharpness
+    if sharpness != 0:
+        factor = 1.0 + (sharpness / 100.0)
+        enhancer = ImageEnhance.Sharpness(image)
+        image = enhancer.enhance(max(0.0, factor))
+    
+    return image
+
+
 def status_html(text: str, kind: str = 'info') -> str:
     css_class = {'info': '', 'success': ' success', 'error': ' error'}.get(kind, '')
     return '<div class=\"status-box' + css_class + '\">' + text + '</div>'
 
 
-def process_single_image(image, preset, enable_edge_detection, edge_strength, model_params, progress_callback=None):
+def process_single_image(image, preset, enable_edge_detection, edge_strength, invert_colors, model_params, progress_callback=None):
     generator = ReliefGenerator()
     generator.load_image_from_pil(image, max_size=preset['max_size'])
     generator.create_depth_map(
-        invert_depth=False,
+        invert_depth=invert_colors,
         blur_radius=preset['blur'],
         gamma=preset['gamma'],
         enable_hill_removal=True,
@@ -231,6 +279,16 @@ if 'batch_results' not in st.session_state:
     st.session_state.batch_results = []
 if 'batch_in_progress' not in st.session_state:
     st.session_state.batch_in_progress = False
+if 'original_image' not in st.session_state:
+    st.session_state.original_image = None
+if 'brightness' not in st.session_state:
+    st.session_state.brightness = 0
+if 'contrast' not in st.session_state:
+    st.session_state.contrast = 0
+if 'saturation' not in st.session_state:
+    st.session_state.saturation = 0
+if 'sharpness' not in st.session_state:
+    st.session_state.sharpness = 0
 
 
 # HEADER
@@ -288,6 +346,16 @@ with tab_single:
             help='Direct link to an image file',
         )
         
+        # Store image when uploaded or URL changes
+        if uploaded_file is not None or (url_input and url_input.strip()):
+            # Clear adjustments when new image is uploaded
+            if 'last_upload_name' not in st.session_state or st.session_state.last_upload_name != (uploaded_file.name if uploaded_file else url_input):
+                st.session_state.last_upload_name = uploaded_file.name if uploaded_file else url_input
+                st.session_state.brightness = 0
+                st.session_state.contrast = 0
+                st.session_state.saturation = 0
+                st.session_state.sharpness = 0
+        
         st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
         
         st.markdown('#### 🎚️ Quality Preset')
@@ -331,7 +399,107 @@ with tab_single:
         
         st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
         
+        # Image Adjustment Section
+        st.markdown('#### 🎨 Image Adjustments')
+        st.caption('Adjust brightness, contrast, saturation, and sharpness before generating the relief model')
+        
+        adj_col1, adj_col2, adj_col3, adj_col4 = st.columns(4)
+        with adj_col1:
+            brightness = st.slider(
+                '☀️ Brightness',
+                min_value=-100,
+                max_value=100,
+                value=st.session_state.brightness,
+                step=5,
+                help='Adjust image brightness (-100 to +100)'
+            )
+            st.session_state.brightness = brightness
+        
+        with adj_col2:
+            contrast = st.slider(
+                '🔆 Contrast',
+                min_value=-100,
+                max_value=100,
+                value=st.session_state.contrast,
+                step=5,
+                help='Adjust image contrast (-100 to +100)'
+            )
+            st.session_state.contrast = contrast
+        
+        with adj_col3:
+            saturation = st.slider(
+                '🎨 Saturation',
+                min_value=-100,
+                max_value=100,
+                value=st.session_state.saturation,
+                step=5,
+                help='Adjust color saturation (-100 to +100)'
+            )
+            st.session_state.saturation = saturation
+        
+        with adj_col4:
+            sharpness = st.slider(
+                '🔪 Sharpness',
+                min_value=-100,
+                max_value=100,
+                value=st.session_state.sharpness,
+                step=5,
+                help='Adjust image sharpness (-100 to +100)'
+            )
+            st.session_state.sharpness = sharpness
+        
+        # Show adjusted image preview
+        load_button_key = 'load_preview_btn'
+        
+        if uploaded_file is not None or (url_input and url_input.strip()):
+            preview_col1, preview_col2 = st.columns(2)
+            
+            try:
+                # Load the original image - read bytes directly from uploaded file to avoid stream issues
+                if uploaded_file is not None:
+                    raw_image = Image.open(uploaded_file)
+                    raw_image.load()
+                    # Reset file pointer for potential reuse
+                    uploaded_file.seek(0)
+                else:
+                    raw_image, err = download_image_from_url(url_input.strip())
+                    if err:
+                        raw_image = None
+                
+                if raw_image:
+                    # Convert to grayscale if not already
+                    if raw_image.mode != 'L':
+                        raw_image = raw_image.convert('L')
+                    st.session_state.original_image = raw_image
+                    
+                    # Apply adjustments for preview
+                    adjusted_image = apply_image_adjustments(raw_image.copy(), brightness, contrast, saturation, sharpness)
+                    
+                    with preview_col1:
+                        st.markdown('**Original:**')
+                        st.image(raw_image, use_container_width=True)
+                    
+                    with preview_col2:
+                        st.markdown('**Adjusted Preview:**')
+                        st.image(adjusted_image, use_container_width=True)
+                    
+                    # Show reset button if adjustments were made
+                    if brightness != 0 or contrast != 0 or saturation != 0 or sharpness != 0:
+                        if st.button('🔄 Reset Adjustments', key='reset_adjustments'):
+                            st.session_state.brightness = 0
+                            st.session_state.contrast = 0
+                            st.session_state.saturation = 0
+                            st.session_state.sharpness = 0
+                            st.rerun()
+            except Exception as e:
+                st.warning('Could not load image preview: ' + str(e))
+        
+        st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+        
         with st.expander('⚙️ Advanced Settings'):
+            invert_colors = st.checkbox('🔄 Invert Colors (Black ↔ White)', value=False,
+                help='Swap black and white. Use this if your image has dark background and light foreground, or vice versa.')
+            
             enable_edge_detection = st.checkbox('🔍 Enable Edge Detection', value=False, 
                 help='Enhance edges for crisper relief features in the 3D model')
             edge_strength = st.slider('Edge Strength', 0.1, 2.0, 1.0, 0.1,
@@ -354,36 +522,59 @@ with tab_single:
                 else:
                     with st.spinner('Processing image...'):
                         try:
-                            image, err = get_image(uploaded_file, url_input)
-                            if err:
-                                st.error(err)
+                            # Use the stored original image if available (avoids re-reading file)
+                            if st.session_state.original_image is not None:
+                                image = st.session_state.original_image.copy()
                             else:
-                                def progress(pct, msg):
-                                    st.session_state.status_text = msg + ' (' + str(int(pct*100)) + '%)'
-                                    st.session_state.status_kind = 'info'
-                                
-                                generator = process_single_image(
-                                    image, preset, enable_edge_detection, edge_strength,
-                                    {'width': model_width, 'thickness': model_thickness, 'base': base_thickness},
-                                    progress
-                                )
-                                
-                                with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as f:
-                                    temp_path = f.name
-                                
-                                generator.save_stl(temp_path)
-                                
-                                with open(temp_path, 'rb') as f:
-                                    st.session_state.stl_bytes = f.read()
-                                
+                                image, err = get_image(uploaded_file, url_input)
+                                if err:
+                                    st.error(err)
+                                    st.stop()
+                            
+                            # Apply image adjustments
+                            image = apply_image_adjustments(image, brightness, contrast, saturation, sharpness)
+                            
+                            def progress(pct, msg):
+                                st.session_state.status_text = msg + ' (' + str(int(pct*100)) + '%)'
+                                st.session_state.status_kind = 'info'
+                            
+                            generator = process_single_image(
+                                image, preset, enable_edge_detection, edge_strength, invert_colors,
+                                {'width': model_width, 'thickness': model_thickness, 'base': base_thickness},
+                                progress
+                            )
+                            
+                            # Save STL to a temporary file and read it
+                            with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp:
+                                temp_path = tmp.name
+                            
+                            # Write STL data
+                            generator.save_stl(temp_path)
+                            
+                            # Capture data before closing handles
+                            depth_img = generator.get_depth_map_image()
+                            mesh_info = generator.get_mesh_info()
+                            
+                            # Read the file data
+                            with open(temp_path, 'rb') as f:
+                                st.session_state.stl_bytes = f.read()
+                            
+                            # Explicitly close all handles before deleting (Windows issue)
+                            f = None
+                            generator = None
+                            
+                            # Delete the temp file
+                            try:
                                 os.unlink(temp_path)
-                                
-                                st.session_state.preview_done = True
-                                st.session_state.depth_image = generator.get_depth_map_image()
-                                st.session_state.depth_info = generator.get_mesh_info()
-                                st.session_state.status_text = '✅ Processing complete! Model ready for download.'
-                                st.session_state.status_kind = 'success'
-                                st.rerun()
+                            except OSError:
+                                pass  # File may already be deleted or locked, continue anyway
+                            
+                            st.session_state.preview_done = True
+                            st.session_state.depth_image = depth_img
+                            st.session_state.depth_info = mesh_info
+                            st.session_state.status_text = '✅ Processing complete! Model ready for download.'
+                            st.session_state.status_kind = 'success'
+                            st.rerun()
                         except Exception as e:
                             st.session_state.status_text = '❌ Error: ' + str(e)
                             st.session_state.status_kind = 'error'
@@ -475,6 +666,8 @@ with tab_batch:
     
     st.markdown('##### Model Settings')
     batch_preset = st.selectbox('Quality Preset', ['draft', 'preview', 'high'], index=1, key='batch_preset')
+    batch_invert_colors = st.checkbox('🔄 Invert Colors (Black ↔ White)', value=False, key='batch_invert_colors',
+        help='Swap black and white in all images')
     batch_edge_detection = st.checkbox('🔍 Enable Edge Detection', value=False, key='batch_edge_detection')
     batch_edge_strength = st.slider('Edge Strength', 0.1, 2.0, 1.0, 0.1, key='batch_edge_strength') if batch_edge_detection else 1.0
     
@@ -592,8 +785,12 @@ with tab_batch:
                 image = Image.open(uploaded_file)
                 image.load()
                 
+                # Convert to grayscale
+                if image.mode != 'L':
+                    image = image.convert('L')
+                
                 generator = process_single_image(
-                    image, batch_preset_info, batch_edge_detection, batch_edge_strength,
+                    image, batch_preset_info, batch_edge_detection, batch_edge_strength, batch_invert_colors,
                     {'width': batch_model_width, 'thickness': batch_model_thickness, 'base': batch_base_thickness},
                     None
                 )
