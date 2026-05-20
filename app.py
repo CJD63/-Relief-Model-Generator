@@ -5,6 +5,7 @@ import shutil
 import zipfile
 import requests
 import time
+import numpy as np
 from PIL import Image
 from io import BytesIO
 from datetime import datetime
@@ -303,6 +304,20 @@ if 'pan_x' not in st.session_state:
     st.session_state.pan_x = 0
 if 'pan_y' not in st.session_state:
     st.session_state.pan_y = 0
+if 'rotation' not in st.session_state:
+    st.session_state.rotation = 0
+if 'crop_enabled' not in st.session_state:
+    st.session_state.crop_enabled = False
+if 'crop_top' not in st.session_state:
+    st.session_state.crop_top = 0
+if 'crop_bottom' not in st.session_state:
+    st.session_state.crop_bottom = 100
+if 'crop_left' not in st.session_state:
+    st.session_state.crop_left = 0
+if 'crop_right' not in st.session_state:
+    st.session_state.crop_right = 100
+if 'comparison_mode' not in st.session_state:
+    st.session_state.comparison_mode = 'slider'
 
 
 # HEADER
@@ -533,9 +548,93 @@ with tab_single:
                     st.session_state.zoom_level = 1.0
                     st.session_state.pan_x = 0
                     st.session_state.pan_y = 0
+                    st.session_state.rotation = 0
+                    st.session_state.crop_enabled = False
+                    st.session_state.crop_top = 0
+                    st.session_state.crop_bottom = 100
+                    st.session_state.crop_left = 0
+                    st.session_state.crop_right = 100
                     
                     # Apply adjustments for preview
                     adjusted_image = apply_image_adjustments(raw_image.copy(), brightness, contrast, saturation, sharpness)
+                    
+                    # Rotation controls
+                    st.markdown('**🔄 Rotation:**')
+                    rot_col1, rot_col2, rot_col3, rot_col4, rot_col5 = st.columns([1, 1, 1, 1, 3])
+                    with rot_col1:
+                        if st.button('↺ 90°', key='rot_90_ccw', help='Rotate 90° counter-clockwise'):
+                            st.session_state.rotation = (st.session_state.rotation - 90) % 360
+                    with rot_col2:
+                        if st.button('↻ 90°', key='rot_90_cw', help='Rotate 90° clockwise'):
+                            st.session_state.rotation = (st.session_state.rotation + 90) % 360
+                    with rot_col3:
+                        if st.button('⟲ 180°', key='rot_180', help='Rotate 180°'):
+                            st.session_state.rotation = (st.session_state.rotation + 180) % 360
+                    with rot_col4:
+                        if st.button('⟳ Reset', key='rot_reset', help='Reset rotation'):
+                            st.session_state.rotation = 0
+                    
+                    # Apply rotation if needed
+                    if st.session_state.rotation != 0:
+                        raw_display_img = raw_image.rotate(st.session_state.rotation, expand=True)
+                        adjusted_display_img = adjusted_image.rotate(st.session_state.rotation, expand=True)
+                    else:
+                        raw_display_img = raw_image
+                        adjusted_display_img = adjusted_image
+                    
+                    # Crop controls
+                    st.markdown('**✂️ Crop:**')
+                    crop_toggle = st.checkbox('Enable Crop', value=st.session_state.crop_enabled, key='crop_enable')
+                    st.session_state.crop_enabled = crop_toggle
+                    
+                    if crop_toggle:
+                        crop_col1, crop_col2, crop_col3, crop_col4 = st.columns(4)
+                        with crop_col1:
+                            crop_top = st.slider('Top %', 0, 50, st.session_state.crop_top, key='crop_top_slider')
+                            st.session_state.crop_top = crop_top
+                        with crop_col2:
+                            crop_bottom = st.slider('Bottom %', 50, 100, st.session_state.crop_bottom, key='crop_bottom_slider')
+                            st.session_state.crop_bottom = crop_bottom
+                        with crop_col3:
+                            crop_left = st.slider('Left %', 0, 50, st.session_state.crop_left, key='crop_left_slider')
+                            st.session_state.crop_left = crop_left
+                        with crop_col4:
+                            crop_right = st.slider('Right %', 50, 100, st.session_state.crop_right, key='crop_right_slider')
+                            st.session_state.crop_right = crop_right
+                        
+                        # Apply crop
+                        w, h = raw_display_img.size
+                        top_px = int(h * st.session_state.crop_top / 100)
+                        bottom_px = int(h * st.session_state.crop_bottom / 100)
+                        left_px = int(w * st.session_state.crop_left / 100)
+                        right_px = int(w * st.session_state.crop_right / 100)
+                        
+                        if bottom_px > top_px and right_px > left_px:
+                            raw_display_img = raw_display_img.crop((left_px, top_px, right_px, bottom_px))
+                            adjusted_display_img = adjusted_display_img.crop((left_px, top_px, right_px, bottom_px))
+                    
+                    # Comparison mode
+                    st.markdown('**📊 Comparison Mode:**')
+                    comp_col1, comp_col2 = st.columns(2)
+                    with comp_col1:
+                        comp_mode = st.radio('View Mode', ['slider', 'side-by-side', 'overlay'], 
+                            index=['slider', 'side-by-side', 'overlay'].index(st.session_state.comparison_mode) if st.session_state.comparison_mode in ['slider', 'side-by-side', 'overlay'] else 0,
+                            key='comp_mode_radio', horizontal=True)
+                        st.session_state.comparison_mode = comp_mode
+                    
+                    # Apply crop if enabled (before rotation for correct dimensions)
+                    if st.session_state.crop_enabled:
+                        w, h = raw_image.size
+                        top_px = int(h * st.session_state.crop_top / 100)
+                        bottom_px = int(h * st.session_state.crop_bottom / 100)
+                        left_px = int(w * st.session_state.crop_left / 100)
+                        right_px = int(w * st.session_state.crop_right / 100)
+                        if bottom_px > top_px and right_px > left_px:
+                            raw_image = raw_image.crop((left_px, top_px, right_px, bottom_px))
+                    
+                    # Apply rotation if needed
+                    if st.session_state.rotation != 0:
+                        raw_image = raw_image.rotate(st.session_state.rotation, expand=True)
                     
                     # Zoom/pan controls
                     zoom_col1, zoom_col2, zoom_col3, zoom_col4 = st.columns(4)
@@ -558,19 +657,45 @@ with tab_single:
                     if st.session_state.zoom_level != 1.0:
                         w, h = raw_image.size
                         new_w, new_h = int(w * st.session_state.zoom_level), int(h * st.session_state.zoom_level)
-                        raw_display = raw_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                        adjusted_display = adjusted_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        raw_final = raw_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        adjusted_final = adjusted_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
                     else:
-                        raw_display = raw_image
-                        adjusted_display = adjusted_image
+                        raw_final = raw_image
+                        adjusted_final = adjusted_image
                     
-                    with preview_col1:
-                        st.markdown('**Original:**')
-                        st.image(raw_display, use_container_width=True)
-                    
-                    with preview_col2:
-                        st.markdown('**Adjusted Preview:**')
-                        st.image(adjusted_display, use_container_width=True)
+                    # Display based on comparison mode
+                    if st.session_state.comparison_mode == 'side-by-side':
+                        with preview_col1:
+                            st.markdown('**Original:**')
+                            st.image(raw_final, use_container_width=True)
+                        with preview_col2:
+                            st.markdown('**Adjusted Preview:**')
+                            st.image(adjusted_final, use_container_width=True)
+                    elif st.session_state.comparison_mode == 'slider':
+                        st.markdown('**Before / After Comparison:**')
+                        # Create comparison with toggle
+                        slider_pos = st.slider('Drag to compare', min_value=0, max_value=100, value=50, key='comparison_slider')
+                        if slider_pos < 50:
+                            st.image(raw_final, use_container_width=True)
+                            st.caption('◀ Original')
+                        else:
+                            st.image(adjusted_final, use_container_width=True)
+                            st.caption('Adjusted ▶')
+                    else:  # overlay mode
+                        st.markdown('**Overlay Comparison:**')
+                        col_overlay1, col_overlay2 = st.columns(2)
+                        with col_overlay1:
+                            st.image(raw_final, caption='Original', use_container_width=True)
+                        with col_overlay2:
+                            st.image(adjusted_final, caption='Adjusted', use_container_width=True)
+                        # Show blended overlay
+                        arr1 = np.array(raw_final.convert('RGB'))
+                        arr2 = np.array(adjusted_final.convert('RGB'))
+                        if arr1.shape == arr2.shape:
+                            blended = (arr1.astype(float) * 0.5 + arr2.astype(float) * 0.5).astype(np.uint8)
+                            blended_img = Image.fromarray(blended)
+                            st.markdown('**Blended (50% overlay):**')
+                            st.image(blended_img, use_container_width=True)
                     
                     # Show reset button if adjustments were made
                     if brightness != 0 or contrast != 0 or saturation != 0 or sharpness != 0:
@@ -612,6 +737,7 @@ with tab_single:
                     with st.spinner('Processing image...'):
                         try:
                             # Use the stored original image if available (avoids re-reading file)
+                            # Note: original_image already has rotation and crop applied in preview section
                             if st.session_state.original_image is not None:
                                 image = st.session_state.original_image.copy()
                             else:
@@ -619,6 +745,17 @@ with tab_single:
                                 if err:
                                     st.error(err)
                                     st.stop()
+                                # Apply rotation and crop if needed for fallback path
+                                if st.session_state.rotation != 0:
+                                    image = image.rotate(st.session_state.rotation, expand=True)
+                                if st.session_state.crop_enabled:
+                                    w, h = image.size
+                                    top_px = int(h * st.session_state.crop_top / 100)
+                                    bottom_px = int(h * st.session_state.crop_bottom / 100)
+                                    left_px = int(w * st.session_state.crop_left / 100)
+                                    right_px = int(w * st.session_state.crop_right / 100)
+                                    if bottom_px > top_px and right_px > left_px:
+                                        image = image.crop((left_px, top_px, right_px, bottom_px))
                             
                             # Apply image adjustments
                             image = apply_image_adjustments(image, brightness, contrast, saturation, sharpness)
