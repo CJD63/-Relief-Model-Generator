@@ -946,6 +946,51 @@ with tab_batch:
                 st.session_state.current_batch_preset_name = 'default'
             st.rerun()
     
+    # Export/Import Presets
+    st.markdown('##### 📤 Export / 📥 Import Presets')
+    export_col, import_col = st.columns(2)
+    with export_col:
+        if st.button('⬇️ Export All Presets (JSON)', key='export_batch_presets'):
+            import json
+            export_data = json.dumps(st.session_state.batch_presets, indent=2)
+            st.download_button(
+                label='📥 Download presets.json',
+                data=export_data,
+                file_name='batch_presets.json',
+                mime='application/json',
+                key='download_presets_btn'
+            )
+    with import_col:
+        uploaded_preset_file = st.file_uploader('📤 Import Presets (JSON)', type=['json'], key='import_preset_file')
+        if uploaded_preset_file is not None:
+            try:
+                import json
+                imported_data = json.load(uploaded_preset_file)
+                if isinstance(imported_data, dict) and len(imported_data) > 0:
+                    # Validate required keys in at least one preset
+                    valid = True
+                    for name, preset in imported_data.items():
+                        if not isinstance(preset, dict):
+                            valid = False
+                            break
+                        required_keys = ['preset', 'keep_colors', 'invert_colors', 'edge_detection', 'model_width', 'model_thickness', 'base_thickness']
+                        for key in required_keys:
+                            if key not in preset:
+                                valid = False
+                                break
+                    if valid:
+                        # Merge with existing presets (existing keys are overwritten)
+                        for name, preset in imported_data.items():
+                            st.session_state.batch_presets[name] = preset
+                        st.success(f'Imported {len(imported_data)} preset(s) successfully!')
+                        st.rerun()
+                    else:
+                        st.error('Invalid preset file format')
+                else:
+                    st.error('Invalid preset file format')
+            except Exception as e:
+                st.error('Error reading preset file: ' + str(e))
+    
     # Get current preset values
     current_bp = st.session_state.batch_presets.get(st.session_state.current_batch_preset_name, st.session_state.batch_presets['default'])
     
