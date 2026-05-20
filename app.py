@@ -145,7 +145,7 @@ st.markdown('''
 
 
 # Helpers
-def download_image_from_url(url: str):
+def download_image_from_url(url: str, keep_colors=False):
     try:
         headers = {
             'User-Agent': (
@@ -157,8 +157,8 @@ def download_image_from_url(url: str):
         r = requests.get(url, headers=headers, timeout=30)
         r.raise_for_status()
         image = Image.open(BytesIO(r.content))
-        # Convert to grayscale
-        if image.mode != 'L':
+        # Convert to grayscale only if not keeping original colors
+        if not keep_colors and image.mode != 'L':
             image = image.convert('L')
         return image, None
     except requests.exceptions.Timeout:
@@ -173,16 +173,16 @@ def download_image_from_url(url: str):
         return None, 'Unexpected error: ' + str(e)
 
 
-def get_image(uploaded_file, url_input: str):
+def get_image(uploaded_file, url_input: str, keep_colors=False):
     if url_input and url_input.strip():
-        img, err = download_image_from_url(url_input.strip())
+        img, err = download_image_from_url(url_input.strip(), keep_colors)
         return img, err
     elif uploaded_file is not None:
         try:
             image = Image.open(uploaded_file)
             image.load()
-            # Convert to grayscale
-            if image.mode != 'L':
+            # Convert to grayscale only if not keeping original colors
+            if not keep_colors and image.mode != 'L':
                 image = image.convert('L')
             return image, None
         except IOError as e:
@@ -281,6 +281,8 @@ if 'batch_in_progress' not in st.session_state:
     st.session_state.batch_in_progress = False
 if 'original_image' not in st.session_state:
     st.session_state.original_image = None
+if 'keep_original_colors' not in st.session_state:
+    st.session_state.keep_original_colors = False
 if 'brightness' not in st.session_state:
     st.session_state.brightness = 0
 if 'contrast' not in st.session_state:
@@ -289,6 +291,18 @@ if 'saturation' not in st.session_state:
     st.session_state.saturation = 0
 if 'sharpness' not in st.session_state:
     st.session_state.sharpness = 0
+if 'adjustment_presets' not in st.session_state:
+    st.session_state.adjustment_presets = {
+        'default': {'brightness': 0, 'contrast': 0, 'saturation': 0, 'sharpness': 0}
+    }
+if 'current_preset_name' not in st.session_state:
+    st.session_state.current_preset_name = 'default'
+if 'zoom_level' not in st.session_state:
+    st.session_state.zoom_level = 1.0
+if 'pan_x' not in st.session_state:
+    st.session_state.pan_x = 0
+if 'pan_y' not in st.session_state:
+    st.session_state.pan_y = 0
 
 
 # HEADER
@@ -403,6 +417,49 @@ with tab_single:
         st.markdown('#### 🎨 Image Adjustments')
         st.caption('Adjust brightness, contrast, saturation, and sharpness before generating the relief model')
         
+        # Keep colors option
+        keep_colors = st.checkbox('🎨 Keep Original Colors', value=st.session_state.keep_original_colors,
+            help='Keep the original image colors instead of converting to grayscale')
+        st.session_state.keep_original_colors = keep_colors
+        
+        # Preset profiles
+        preset_col1, preset_col2, preset_col3, preset_col4 = st.columns([2, 1, 1, 1])
+        with preset_col1:
+            preset_options = list(st.session_state.adjustment_presets.keys())
+            selected_preset = st.selectbox('📁 Preset', preset_options, 
+                index=preset_options.index(st.session_state.current_preset_name) if st.session_state.current_preset_name in preset_options else 0,
+                key='adjustment_preset_selector')
+            if selected_preset != st.session_state.current_preset_name:
+                st.session_state.current_preset_name = selected_preset
+                p = st.session_state.adjustment_presets[selected_preset]
+                st.session_state.brightness = p.get('brightness', 0)
+                st.session_state.contrast = p.get('contrast', 0)
+                st.session_state.saturation = p.get('saturation', 0)
+                st.session_state.sharpness = p.get('sharpness', 0)
+                st.rerun()
+        with preset_col2:
+            save_preset_name = st.text_input('Save as', value='', placeholder='preset name', key='save_preset_name')
+        with preset_col3:
+            if st.button('💾 Save', key='save_preset_btn', disabled=not save_preset_name.strip()):
+                name = save_preset_name.strip()
+                st.session_state.adjustment_presets[name] = {
+                    'brightness': st.session_state.brightness,
+                    'contrast': st.session_state.contrast,
+                    'saturation': st.session_state.saturation,
+                    'sharpness': st.session_state.sharpness
+                }
+                st.session_state.current_preset_name = name
+                st.session_state.save_preset_name = ''
+                st.rerun()
+        with preset_col4:
+            delete_preset_name = st.selectbox('🗑️ Delete', ['(none)'] + [p for p in st.session_state.adjustment_presets.keys() if p != 'default'], key='delete_preset_selector')
+            if delete_preset_name != '(none)':
+                if st.button('🗑️', key='delete_preset_btn'):
+                    del st.session_state.adjustment_presets[delete_preset_name]
+                    if st.session_state.current_preset_name == delete_preset_name:
+                        st.session_state.current_preset_name = 'default'
+                    st.rerun()
+        
         adj_col1, adj_col2, adj_col3, adj_col4 = st.columns(4)
         with adj_col1:
             brightness = st.slider(
@@ -467,21 +524,53 @@ with tab_single:
                         raw_image = None
                 
                 if raw_image:
-                    # Convert to grayscale if not already
-                    if raw_image.mode != 'L':
+                    # Convert to grayscale only if not keeping original colors
+                    if not keep_colors and raw_image.mode != 'L':
                         raw_image = raw_image.convert('L')
                     st.session_state.original_image = raw_image
+                    
+                    # Reset zoom/pan when new image is loaded
+                    st.session_state.zoom_level = 1.0
+                    st.session_state.pan_x = 0
+                    st.session_state.pan_y = 0
                     
                     # Apply adjustments for preview
                     adjusted_image = apply_image_adjustments(raw_image.copy(), brightness, contrast, saturation, sharpness)
                     
+                    # Zoom/pan controls
+                    zoom_col1, zoom_col2, zoom_col3, zoom_col4 = st.columns(4)
+                    with zoom_col1:
+                        if st.button('🔍-', key='zoom_out'):
+                            st.session_state.zoom_level = max(0.5, st.session_state.zoom_level - 0.25)
+                    with zoom_col2:
+                        zoom_level = st.slider('Zoom', 0.5, 4.0, st.session_state.zoom_level, 0.25, key='zoom_slider')
+                        st.session_state.zoom_level = zoom_level
+                    with zoom_col3:
+                        if st.button('🔍+', key='zoom_in'):
+                            st.session_state.zoom_level = min(4.0, st.session_state.zoom_level + 0.25)
+                    with zoom_col4:
+                        if st.button('↩️ Reset View', key='reset_view'):
+                            st.session_state.zoom_level = 1.0
+                            st.session_state.pan_x = 0
+                            st.session_state.pan_y = 0
+                    
+                    # Apply zoom by resizing image
+                    if st.session_state.zoom_level != 1.0:
+                        w, h = raw_image.size
+                        new_w, new_h = int(w * st.session_state.zoom_level), int(h * st.session_state.zoom_level)
+                        raw_display = raw_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                        adjusted_display = adjusted_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    else:
+                        raw_display = raw_image
+                        adjusted_display = adjusted_image
+                    
                     with preview_col1:
                         st.markdown('**Original:**')
-                        st.image(raw_image, use_container_width=True)
+                        st.image(raw_display, use_container_width=True)
                     
                     with preview_col2:
                         st.markdown('**Adjusted Preview:**')
-                        st.image(adjusted_image, use_container_width=True)
+                        st.image(adjusted_display, use_container_width=True)
                     
                     # Show reset button if adjustments were made
                     if brightness != 0 or contrast != 0 or saturation != 0 or sharpness != 0:
@@ -533,6 +622,10 @@ with tab_single:
                             
                             # Apply image adjustments
                             image = apply_image_adjustments(image, brightness, contrast, saturation, sharpness)
+                            
+                            # Apply grayscale conversion if keeping colors is disabled
+                            if not keep_colors and image.mode != 'L':
+                                image = image.convert('L')
                             
                             def progress(pct, msg):
                                 st.session_state.status_text = msg + ' (' + str(int(pct*100)) + '%)'
@@ -666,6 +759,8 @@ with tab_batch:
     
     st.markdown('##### Model Settings')
     batch_preset = st.selectbox('Quality Preset', ['draft', 'preview', 'high'], index=1, key='batch_preset')
+    batch_keep_colors = st.checkbox('🎨 Keep Original Colors', value=False, key='batch_keep_colors',
+        help='Keep original colors instead of converting to grayscale')
     batch_invert_colors = st.checkbox('🔄 Invert Colors (Black ↔ White)', value=False, key='batch_invert_colors',
         help='Swap black and white in all images')
     batch_edge_detection = st.checkbox('🔍 Enable Edge Detection', value=False, key='batch_edge_detection')
@@ -785,8 +880,8 @@ with tab_batch:
                 image = Image.open(uploaded_file)
                 image.load()
                 
-                # Convert to grayscale
-                if image.mode != 'L':
+                # Convert to grayscale only if not keeping original colors
+                if not batch_keep_colors and image.mode != 'L':
                     image = image.convert('L')
                 
                 generator = process_single_image(
