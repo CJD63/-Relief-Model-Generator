@@ -3,7 +3,6 @@ import tempfile
 import os
 import shutil
 import zipfile
-import requests
 import time
 import numpy as np
 from PIL import Image
@@ -11,6 +10,13 @@ from io import BytesIO
 from datetime import datetime
 from relief import ReliefGenerator
 from depth import DepthMapGenerator
+
+import ui
+import session_state
+from image_utils import (
+    download_image_from_url, get_image, apply_image_adjustments,
+    AI_MODELS,
+)
 
 # Page config
 st.set_page_config(
@@ -20,225 +26,8 @@ st.set_page_config(
 )
 
 # Custom CSS
-st.markdown('''
-<style>
-    .main-header {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-        padding: 2rem 2.5rem;
-        border-radius: 16px;
-        margin-bottom: 2rem;
-        color: white;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-    }
-    .main-header h1 { margin: 0 0 0.5rem 0; font-size: 2.2rem; }
-    .main-header p  { margin: 0; opacity: 0.85; font-size: 1rem; }
+ui.render_css()
 
-    .section-card {
-        background: #f8f9fa;
-        border: 1px solid #e9ecef;
-        border-radius: 12px;
-        padding: 1.25rem 1.5rem;
-        margin-bottom: 1rem;
-    }
-    .section-card h4 { margin: 0 0 0.75rem 0; color: #495057; font-size: 1rem; }
-
-    .badge {
-        display: inline-block;
-        padding: 0.25rem 0.65rem;
-        border-radius: 20px;
-        font-size: 0.78rem;
-        font-weight: 600;
-        margin: 0.15rem;
-    }
-    .badge-blue   { background: #dbeafe; color: #1d4ed8; }
-    .badge-green  { background: #dcfce7; color: #15803d; }
-    .badge-purple { background: #ede9fe; color: #6d28d9; }
-    .badge-orange { background: #ffedd5; color: #c2410c; }
-
-    .status-box {
-        background: #1e293b;
-        color: #94a3b8;
-        border-radius: 10px;
-        padding: 1rem 1.25rem;
-        font-family: monospace;
-        font-size: 0.85rem;
-        min-height: 80px;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-    .status-box.success { color: #4ade80; }
-    .status-box.error   { color: #f87171; }
-
-    .step-row {
-        display: flex;
-        gap: 0.5rem;
-        align-items: center;
-        margin-bottom: 1.25rem;
-    }
-    .step-bubble {
-        width: 32px; height: 32px;
-        border-radius: 50%;
-        display: flex; align-items: center; justify-content: center;
-        font-weight: 700; font-size: 0.85rem;
-        flex-shrink: 0;
-    }
-    .step-bubble.active   { background: #3b82f6; color: white; }
-    .step-bubble.done     { background: #22c55e; color: white; }
-    .step-bubble.inactive { background: #e5e7eb; color: #9ca3af; }
-    .step-label { font-size: 0.88rem; color: #374151; }
-
-    .pill-list { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
-
-    .thin-divider { border-top: 1px solid #e5e7eb; margin: 1rem 0; }
-
-    .download-area {
-        background: linear-gradient(135deg, #f0fdf4, #dcfce7);
-        border: 2px dashed #86efac;
-        border-radius: 12px;
-        padding: 1.5rem;
-        text-align: center;
-    }
-    
-    .batch-progress {
-        background: #f1f5f9;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-    }
-    .batch-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 0.5rem;
-        border-bottom: 1px solid #e2e8f0;
-    }
-    .batch-item:last-child { border-bottom: none; }
-    .batch-item.success { background: #dcfce7; }
-    .batch-item.failed { background: #fee2e2; }
-    
-    .toggle-switch {
-        position: relative;
-        width: 50px;
-        height: 26px;
-    }
-    .toggle-switch input { opacity: 0; width: 0; height: 0; }
-    .toggle-slider {
-        position: absolute;
-        cursor: pointer;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background-color: #ccc;
-        transition: .3s;
-        border-radius: 26px;
-    }
-    .toggle-slider:before {
-        position: absolute;
-        content: '';
-        height: 20px;
-        width: 20px;
-        left: 3px;
-        bottom: 3px;
-        background-color: white;
-        transition: .3s;
-        border-radius: 50%;
-    }
-    input:checked + .toggle-slider { background-color: #3b82f6; }
-    input:checked + .toggle-slider:before { transform: translateX(24px); }
-</style>
-''', unsafe_allow_html=True)
-
-
-# Helpers
-def download_image_from_url(url: str, keep_colors=False):
-    try:
-        headers = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/91.0.4472.124 Safari/537.36'
-            )
-        }
-        r = requests.get(url, headers=headers, timeout=30)
-        r.raise_for_status()
-        image = Image.open(BytesIO(r.content))
-        # Convert to grayscale only if not keeping original colors
-        if not keep_colors and image.mode != 'L':
-            image = image.convert('L')
-        return image, None
-    except requests.exceptions.Timeout:
-        return None, 'Timeout error: The request took too long. Please check the URL.'
-    except requests.exceptions.HTTPError as e:
-        return None, 'HTTP error ' + str(e.response.status_code) + ': Could not download image.'
-    except requests.exceptions.RequestException as e:
-        return None, 'Network error: ' + str(e)
-    except IOError as e:
-        return None, 'Invalid image format: ' + str(e)
-    except Exception as e:
-        return None, 'Unexpected error: ' + str(e)
-
-
-def get_image(uploaded_file, url_input: str, keep_colors=False):
-    if url_input and url_input.strip():
-        img, err = download_image_from_url(url_input.strip(), keep_colors)
-        return img, err
-    elif uploaded_file is not None:
-        try:
-            image = Image.open(uploaded_file)
-            image.load()
-            # Convert to grayscale only if not keeping original colors
-            if not keep_colors and image.mode != 'L':
-                image = image.convert('L')
-            return image, None
-        except IOError as e:
-            return None, 'Invalid or corrupted image file: ' + str(e)
-        except Exception as e:
-            return None, 'Error loading image: ' + str(e)
-    return None, 'Please upload an image or enter a URL.'
-
-
-def apply_image_adjustments(image, brightness=0, contrast=0, saturation=0, sharpness=0):
-    """Apply brightness, contrast, saturation, and sharpness adjustments to an image.
-    
-    Args:
-        image: PIL Image
-        brightness: -100 to 100 (0 = no change)
-        contrast: -100 to 100 (0 = no change)
-        saturation: -100 to 100 (0 = no change)
-        sharpness: -100 to 100 (0 = no change)
-    
-    Returns:
-        Adjusted PIL Image
-    """
-    from PIL import ImageEnhance
-    
-    # Apply brightness
-    if brightness != 0:
-        factor = 1.0 + (brightness / 100.0)
-        enhancer = ImageEnhance.Brightness(image)
-        image = enhancer.enhance(max(0.0, factor))
-    
-    # Apply contrast
-    if contrast != 0:
-        factor = 1.0 + (contrast / 100.0)
-        enhancer = ImageEnhance.Contrast(image)
-        image = enhancer.enhance(max(0.0, factor))
-    
-    # Apply saturation
-    if saturation != 0:
-        factor = 1.0 + (saturation / 100.0)
-        enhancer = ImageEnhance.Color(image)
-        image = enhancer.enhance(max(0.0, factor))
-    
-    # Apply sharpness
-    if sharpness != 0:
-        factor = 1.0 + (sharpness / 100.0)
-        enhancer = ImageEnhance.Sharpness(image)
-        image = enhancer.enhance(max(0.0, factor))
-    
-    return image
-
-
-def status_html(text: str, kind: str = 'info') -> str:
-    css_class = {'info': '', 'success': ' success', 'error': ' error'}.get(kind, '')
-    return '<div class=\"status-box' + css_class + '\">' + text + '</div>'
 
 
 def process_single_image(image, preset, enable_edge_detection, edge_strength, invert_colors, model_params, progress_callback=None, use_ai_depth=False, ai_model_name='depth-anything/Depth-Anything-V2-Small-hf', ai_device=None):
@@ -272,12 +61,6 @@ def process_single_image(image, preset, enable_edge_detection, edge_strength, in
     return generator
 
 
-# AI model metadata (used by both single-image and batch tabs)
-AI_MODELS = {
-    'depth-anything/Depth-Anything-V2-Small-hf': {'label': 'Depth Anything V2 Small', 'size': '~100 MB', 'speed': '⚡ Fast'},
-    'depth-anything/Depth-Anything-V2-Base-hf': {'label': 'Depth Anything V2 Base', 'size': '~400 MB', 'speed': '🐢 Slower'},
-    'Intel/dpt-hybrid-midas': {'label': 'DPT-Hybrid (MiDaS)', 'size': '~500 MB', 'speed': '🐢 Slower'},
-}
 
 # Cached pipeline loader — prevents model reload on every Streamlit rerun
 @st.cache_resource
@@ -291,96 +74,7 @@ def _cached_load_pipeline(model_name: str, device: int):
 
 
 # Session state
-if 'depth_image' not in st.session_state:
-    st.session_state.depth_image = None
-if 'depth_info' not in st.session_state:
-    st.session_state.depth_info = {}
-if 'stl_bytes' not in st.session_state:
-    st.session_state.stl_bytes = None
-if 'preview_done' not in st.session_state:
-    st.session_state.preview_done = False
-if 'status_text' not in st.session_state:
-    st.session_state.status_text = 'Waiting for input…'
-if 'status_kind' not in st.session_state:
-    st.session_state.status_kind = 'info'
-if 'last_params' not in st.session_state:
-    st.session_state.last_params = {}
-if 'batch_results' not in st.session_state:
-    st.session_state.batch_results = []
-if 'batch_in_progress' not in st.session_state:
-    st.session_state.batch_in_progress = False
-if 'original_image' not in st.session_state:
-    st.session_state.original_image = None
-if 'keep_original_colors' not in st.session_state:
-    st.session_state.keep_original_colors = False
-if 'brightness' not in st.session_state:
-    st.session_state.brightness = 0
-if 'contrast' not in st.session_state:
-    st.session_state.contrast = 0
-if 'saturation' not in st.session_state:
-    st.session_state.saturation = 0
-if 'sharpness' not in st.session_state:
-    st.session_state.sharpness = 0
-if 'adjustment_presets' not in st.session_state:
-    st.session_state.adjustment_presets = {
-        'default': {'brightness': 0, 'contrast': 0, 'saturation': 0, 'sharpness': 0}
-    }
-if 'current_preset_name' not in st.session_state:
-    st.session_state.current_preset_name = 'default'
-if 'zoom_level' not in st.session_state:
-    st.session_state.zoom_level = 1.0
-if 'pan_x' not in st.session_state:
-    st.session_state.pan_x = 0
-if 'pan_y' not in st.session_state:
-    st.session_state.pan_y = 0
-if 'rotation' not in st.session_state:
-    st.session_state.rotation = 0
-if 'crop_enabled' not in st.session_state:
-    st.session_state.crop_enabled = False
-if 'crop_top' not in st.session_state:
-    st.session_state.crop_top = 0
-if 'crop_bottom' not in st.session_state:
-    st.session_state.crop_bottom = 100
-if 'crop_left' not in st.session_state:
-    st.session_state.crop_left = 0
-if 'crop_right' not in st.session_state:
-    st.session_state.crop_right = 100
-if 'comparison_mode' not in st.session_state:
-    st.session_state.comparison_mode = 'slider'
-if 'batch_presets' not in st.session_state:
-    st.session_state.batch_presets = {
-        'default': {
-            'preset': 'preview',
-            'keep_colors': False,
-            'invert_colors': False,
-            'edge_detection': False,
-            'edge_strength': 1.0,
-            'use_ai_depth': False,
-            'ai_model_name': 'depth-anything/Depth-Anything-V2-Small-hf',
-            'model_width': 50.0,
-            'model_thickness': 5.0,
-            'base_thickness': 2.0,
-            'filename_pattern': '{name}_{preset}'
-        }
-    }
-if 'current_batch_preset_name' not in st.session_state:
-    st.session_state.current_batch_preset_name = 'default'
-if 'use_ai_depth' not in st.session_state:
-    st.session_state.use_ai_depth = False
-if 'batch_use_ai_depth' not in st.session_state:
-    st.session_state.batch_use_ai_depth = False
-if 'batch_ai_model_name' not in st.session_state:
-    st.session_state.batch_ai_model_name = 'depth-anything/Depth-Anything-V2-Small-hf'
-if 'comparison_grayscale' not in st.session_state:
-    st.session_state.comparison_grayscale = None
-if 'comparison_ai' not in st.session_state:
-    st.session_state.comparison_ai = None
-if 'debug_mode' not in st.session_state:
-    st.session_state.debug_mode = False
-if 'auto_warmup_model' not in st.session_state:
-    st.session_state.auto_warmup_model = False
-if 'model_warmed_up' not in st.session_state:
-    st.session_state.model_warmed_up = False
+session_state.init_session_state()
 
 # Suppress transformers __path__ deprecation warnings (unless debug mode)
 import warnings
@@ -414,17 +108,7 @@ if st.session_state.get('_warmup_info'):
     st.info(st.session_state._warmup_info)
     del st.session_state._warmup_info
 
-# HEADER
-st.markdown('''
-<div class=\"main-header\">
-  <h1>🎭 3D Relief Model Generator</h1>
-  <p>
-    Convert any image into a printable 3D relief STL model using professional
-    depth-map algorithms — edge-preserving bilateral filtering, non-local means
-    denoising, guided filtering, and morphological smoothing.
-  </p>
-</div>
-''', unsafe_allow_html=True)
+ui.render_header()
 
 
 # Tabs
@@ -435,26 +119,12 @@ with tab_single:
     left_col, right_col = st.columns([1, 1], gap='large')
     
     with left_col:
-        step1_class = 'done' if st.session_state.preview_done else 'active'
-        step2_class = 'active' if st.session_state.preview_done else 'inactive'
-        step3_class = 'done' if st.session_state.stl_bytes else 'inactive'
+        ui.render_step_indicators(
+            preview_done=st.session_state.preview_done,
+            stl_ready=st.session_state.stl_bytes is not None,
+        )
         
-        st.markdown('''
-        <div class=\"step-row\">
-          <div class=\"step-bubble ''' + step1_class + '''\">1</div>
-          <div class=\"step-label\">Upload image &amp; generate depth preview</div>
-        </div>
-        <div class=\"step-row\">
-          <div class=\"step-bubble ''' + step2_class + '''\">2</div>
-          <div class=\"step-label\">Generate STL model</div>
-        </div>
-        <div class=\"step-row\">
-          <div class=\"step-bubble ''' + step3_class + '''\">3</div>
-          <div class=\"step-label\">Download &amp; 3D print</div>
-        </div>
-        ''', unsafe_allow_html=True)
-        
-        st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
+        ui.render_divider()
         
         st.markdown('#### 📷 Image Input')
         uploaded_file = st.file_uploader(
@@ -479,7 +149,7 @@ with tab_single:
                 st.session_state.saturation = 0
                 st.session_state.sharpness = 0
         
-        st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
+        ui.render_divider()
         
         st.markdown('#### 🎚️ Quality Preset')
         preset_col1, preset_col2, preset_col3 = st.columns(3)
@@ -520,7 +190,7 @@ with tab_single:
                 st.warning('Preset {} hill={} is outside safe range (0.1-20). Clamping.'.format(preset_name, hill_val))
                 values['hill'] = max(0.1, min(20, hill_val))
         
-        st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
+        ui.render_divider()
         
         # Image Adjustment Section
         st.markdown('#### 🎨 Image Adjustments')
@@ -802,7 +472,7 @@ with tab_single:
             except Exception as e:
                 st.warning('Could not load image preview: ' + str(e))
         
-        st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+        ui.render_divider()
         
         with st.expander('⚙️ Advanced Settings'):
             use_ai_depth = st.checkbox('🧠 AI Depth Estimation', value=st.session_state.use_ai_depth,
@@ -882,7 +552,7 @@ with tab_single:
             base_thickness = st.slider('Base Thickness (mm)', 0.5, 10.0, 2.0, 0.5)
             
             # Quick Preview: generate only the depth map (no STL) to preview AI depth
-            st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
+            ui.render_divider()
             if st.button('👁️ Quick Preview (Depth Map Only)', width='stretch',
                          help='Generates only the depth map preview without creating the full STL model. '
                               'Useful for quickly iterating on AI depth settings.'):
@@ -940,7 +610,7 @@ with tab_single:
             
             # Depth Map Comparison: generate both grayscale and AI depth maps side by side
             if use_ai_depth:
-                st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+                ui.render_divider()
                 if st.button('📊 Compare Grayscale vs AI Depth', width='stretch',
                              help='Generates both the traditional grayscale depth map and the AI depth map '
                                   'side by side so you can compare the results.'):
@@ -999,7 +669,7 @@ with tab_single:
                             cmp_status.text('❌ Error: ' + str(e))
                             st.error('Comparison failed: ' + str(e))
         
-        st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
+        ui.render_divider()
         
         preset = preset_info.get(st.session_state.preset, preset_info['preview'])
         
@@ -1153,10 +823,10 @@ with tab_single:
         </script>
         ''', unsafe_allow_html=True)
         
-        st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
+        ui.render_divider()
         
         st.markdown('#### 📊 Status')
-        st.markdown(status_html(st.session_state.status_text, st.session_state.status_kind), unsafe_allow_html=True)
+        st.markdown(ui.status_html(st.session_state.status_text, st.session_state.status_kind), unsafe_allow_html=True)
     
     with right_col:
         st.markdown('#### 🖼️ Preview')
@@ -1166,7 +836,7 @@ with tab_single:
             
             # Show side-by-side comparison if both grayscale and AI depth are available
             if st.session_state.comparison_grayscale is not None and st.session_state.comparison_ai is not None:
-                st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+                ui.render_divider()
                 st.markdown('#### 📊 Grayscale vs AI Depth Comparison')
                 cmp_col1, cmp_col2 = st.columns(2)
                 with cmp_col1:
@@ -1177,7 +847,7 @@ with tab_single:
                     st.session_state.comparison_grayscale = None
                     st.session_state.comparison_ai = None
                     st.rerun()
-                st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+                ui.render_divider()
             
             # Depth map PNG download
             depth_buf = BytesIO()
@@ -1206,7 +876,7 @@ with tab_single:
         else:
             st.info('Upload an image and click Generate to see preview')
         
-        st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
+        ui.render_divider()
         
         st.markdown('#### 📥 Download STL')
         if st.session_state.stl_bytes is not None:
@@ -1601,4 +1271,4 @@ with tab_batch:
 
     if clear_batch:
         st.session_state.batch_results = []
-        st.rerun()
+        st.rerun()
