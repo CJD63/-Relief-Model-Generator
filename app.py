@@ -12,6 +12,10 @@ from datetime import datetime
 from relief import ReliefGenerator
 from depth import DepthMapGenerator
 
+# Suppress transformers __path__ deprecation warnings that spam the console
+import warnings
+warnings.filterwarnings("ignore", message="Accessing `__path__`")
+
 # Page config
 st.set_page_config(
     page_title='3D Relief Model Generator',
@@ -436,13 +440,13 @@ with tab_single:
         st.markdown('#### 🎚️ Quality Preset')
         preset_col1, preset_col2, preset_col3 = st.columns(3)
         with preset_col1:
-            if st.button('⚡ Draft', use_container_width=True):
+            if st.button('⚡ Draft', width='stretch'):
                 st.session_state.preset = 'draft'
         with preset_col2:
-            if st.button('👁️ Preview', use_container_width=True):
+            if st.button('👁️ Preview', width='stretch'):
                 st.session_state.preset = 'preview'
         with preset_col3:
-            if st.button('✨ High', use_container_width=True):
+            if st.button('✨ High', width='stretch'):
                 st.session_state.preset = 'high'
         
         if 'preset' not in st.session_state:
@@ -713,27 +717,27 @@ with tab_single:
                     if st.session_state.comparison_mode == 'side-by-side':
                         with preview_col1:
                             st.markdown('**Original:**')
-                            st.image(raw_final, use_container_width=True)
+                            st.image(raw_final, width='stretch')
                         with preview_col2:
                             st.markdown('**Adjusted Preview:**')
-                            st.image(adjusted_final, use_container_width=True)
+                            st.image(adjusted_final, width='stretch')
                     elif st.session_state.comparison_mode == 'slider':
                         st.markdown('**Before / After Comparison:**')
                         # Create comparison with toggle
                         slider_pos = st.slider('Drag to compare', min_value=0, max_value=100, value=50, key='comparison_slider')
                         if slider_pos < 50:
-                            st.image(raw_final, use_container_width=True)
+                            st.image(raw_final, width='stretch')
                             st.caption('◀ Original')
                         else:
-                            st.image(adjusted_final, use_container_width=True)
+                            st.image(adjusted_final, width='stretch')
                             st.caption('Adjusted ▶')
                     else:  # overlay mode
                         st.markdown('**Overlay Comparison:**')
                         col_overlay1, col_overlay2 = st.columns(2)
                         with col_overlay1:
-                            st.image(raw_final, caption='Original', use_container_width=True)
+                            st.image(raw_final, caption='Original', width='stretch')
                         with col_overlay2:
-                            st.image(adjusted_final, caption='Adjusted', use_container_width=True)
+                            st.image(adjusted_final, caption='Adjusted', width='stretch')
                         # Show blended overlay
                         arr1 = np.array(raw_final.convert('RGB'))
                         arr2 = np.array(adjusted_final.convert('RGB'))
@@ -741,7 +745,7 @@ with tab_single:
                             blended = (arr1.astype(float) * 0.5 + arr2.astype(float) * 0.5).astype(np.uint8)
                             blended_img = Image.fromarray(blended)
                             st.markdown('**Blended (50% overlay):**')
-                            st.image(blended_img, use_container_width=True)
+                            st.image(blended_img, width='stretch')
                     
                     # Show reset button if adjustments were made
                     if brightness != 0 or contrast != 0 or saturation != 0 or sharpness != 0:
@@ -790,7 +794,7 @@ with tab_single:
                 with pre_col1:
                     cached = DepthMapGenerator._is_model_cached(ai_model_name)
                     cache_label = '✅ Model cached — click to re-download' if cached else '📥 Pre-download AI Model'
-                    if st.button(cache_label, use_container_width=True,
+                    if st.button(cache_label, width='stretch',
                                  help='Download the AI model now so the first generation is instant. '
                                       'Useful for preparing before uploading images.'):
                         dl_progress = st.progress(0)
@@ -825,7 +829,7 @@ with tab_single:
             
             # Quick Preview: generate only the depth map (no STL) to preview AI depth
             st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
-            if st.button('👁️ Quick Preview (Depth Map Only)', use_container_width=True,
+            if st.button('👁️ Quick Preview (Depth Map Only)', width='stretch',
                          help='Generates only the depth map preview without creating the full STL model. '
                               'Useful for quickly iterating on AI depth settings.'):
                 if uploaded_file is None and not url_input.strip():
@@ -883,7 +887,7 @@ with tab_single:
             # Depth Map Comparison: generate both grayscale and AI depth maps side by side
             if use_ai_depth:
                 st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
-                if st.button('📊 Compare Grayscale vs AI Depth', use_container_width=True,
+                if st.button('📊 Compare Grayscale vs AI Depth', width='stretch',
                              help='Generates both the traditional grayscale depth map and the AI depth map '
                                   'side by side so you can compare the results.'):
                     if uploaded_file is None and not url_input.strip():
@@ -947,7 +951,7 @@ with tab_single:
         
         generate_col1, generate_col2 = st.columns([2, 1])
         with generate_col1:
-            if st.button('🚀 Generate Relief Model', use_container_width=True, type='primary'):
+            if st.button('🚀 Generate Relief Model', width='stretch', type='primary'):
                 if uploaded_file is None and not url_input.strip():
                     st.error('Please upload an image or enter a URL')
                 else:
@@ -1034,7 +1038,7 @@ with tab_single:
                         st.error(str(e))
         
         with generate_col2:
-            if st.button('🗑️ Clear', use_container_width=True):
+            if st.button('🗑️ Clear', width='stretch'):
                 st.session_state.preview_done = False
                 st.session_state.stl_bytes = None
                 st.session_state.depth_image = None
@@ -1051,7 +1055,7 @@ with tab_single:
         st.markdown('#### 🖼️ Preview')
         
         if st.session_state.depth_image is not None:
-            st.image(st.session_state.depth_image, caption='Depth Map Preview', use_container_width=True)
+            st.image(st.session_state.depth_image, caption='Depth Map Preview', width='stretch')
             
             # Show side-by-side comparison if both grayscale and AI depth are available
             if st.session_state.comparison_grayscale is not None and st.session_state.comparison_ai is not None:
@@ -1059,9 +1063,9 @@ with tab_single:
                 st.markdown('#### 📊 Grayscale vs AI Depth Comparison')
                 cmp_col1, cmp_col2 = st.columns(2)
                 with cmp_col1:
-                    st.image(st.session_state.comparison_grayscale, caption='Grayscale Depth Map', use_container_width=True)
+                    st.image(st.session_state.comparison_grayscale, caption='Grayscale Depth Map', width='stretch')
                 with cmp_col2:
-                    st.image(st.session_state.comparison_ai, caption='AI Depth Map', use_container_width=True)
+                    st.image(st.session_state.comparison_ai, caption='AI Depth Map', width='stretch')
                 if st.button('🗑️ Clear Comparison', key='clear_comparison'):
                     st.session_state.comparison_grayscale = None
                     st.session_state.comparison_ai = None
@@ -1076,7 +1080,7 @@ with tab_single:
                 data=depth_buf.getvalue(),
                 file_name='depth_map.png',
                 mime='image/png',
-                use_container_width=True,
+                width='stretch',
                 key='download_depth_png',
             )
             
@@ -1104,7 +1108,7 @@ with tab_single:
                 data=st.session_state.stl_bytes,
                 file_name='relief_model.stl',
                 mime='application/octet-stream',
-                use_container_width=True,
+                width='stretch',
             )
             
             info = st.session_state.depth_info
@@ -1305,11 +1309,11 @@ with tab_batch:
     pattern_valid = '{name}' in filename_pattern or '{index}' in filename_pattern
     
     with batch_col1:
-        process_batch = st.button('🚀 Process All Images', type='primary', use_container_width=True,
+        process_batch = st.button('🚀 Process All Images', type='primary', width='stretch',
             disabled=len(batch_files) == 0 or not pattern_valid, key='process_batch')
 
     with batch_col2:
-        clear_batch = st.button('🗑️ Clear', use_container_width=True, key='clear_batch')
+        clear_batch = st.button('🗑️ Clear', width='stretch', key='clear_batch')
 
     # Batch Results Display
     if st.session_state.batch_results:
@@ -1373,7 +1377,7 @@ with tab_batch:
                 data=zip_buffer.getvalue(),
                 file_name='relief_models_batch.zip',
                 mime='application/zip',
-                use_container_width=True,
+                width='stretch',
             )
             
             # Depth maps ZIP download
@@ -1397,7 +1401,7 @@ with tab_batch:
                     data=depth_zip_buffer.getvalue(),
                     file_name='depth_maps_batch.zip',
                     mime='application/zip',
-                    use_container_width=True,
+                    width='stretch',
                 )
 
     # Batch Processing Loop

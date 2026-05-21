@@ -1,0 +1,7 @@
+[logger]
+# Suppress excessive Streamlit internal logs
+level = "error"
+
+[client]
+# Suppress development-mode messages
+showErrorDetails = false
