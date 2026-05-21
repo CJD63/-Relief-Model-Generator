@@ -15,6 +15,9 @@ import time
 from PIL import Image
 from typing import Optional, Callable
 
+# Module-level pipeline cache to avoid reloading models within the same process
+_pipeline_cache: dict = {}
+
 class DepthMapGenerator:
     def __init__(self):
         self._image = None
@@ -326,6 +329,13 @@ class DepthMapGenerator:
         import time as time_module
         from transformers import pipeline
 
+        # Check module-level cache first
+        cache_key = (model_name, device)
+        if cache_key in _pipeline_cache:
+            if progress_callback:
+                progress_callback(0.15, 'Using cached AI model...')
+            return _pipeline_cache[cache_key]
+
         last_error = None
         for attempt in range(max_retries):
             try:
@@ -347,6 +357,7 @@ class DepthMapGenerator:
                     model=model_name,
                     device=device
                 )
+                _pipeline_cache[cache_key] = pipe
                 return pipe
 
             except Exception as e:
@@ -367,6 +378,9 @@ class DepthMapGenerator:
                                 model=model_name,
                                 device=-1
                             )
+                            # Cache under both keys so future calls skip the OOM path
+                            _pipeline_cache[cache_key] = pipe
+                            _pipeline_cache[(model_name, -1)] = pipe
                             return pipe
                         except Exception as cpu_e:
                             last_error = cpu_e

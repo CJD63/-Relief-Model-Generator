@@ -505,6 +505,16 @@ class TestSTLExporter:
 
 # ── Retry Logic & GPU Fallback Tests ──────────────────────────────────────
 
+# Clear the module-level pipeline cache before retry/GPU tests
+# (it persists across tests and would return stale mocks)
+@pytest.fixture(autouse=True)
+def _clear_pipeline_cache():
+    from depth import _pipeline_cache
+    _pipeline_cache.clear()
+    yield
+    _pipeline_cache.clear()
+
+
 class TestRetryLogic:
     """Tests for _load_pipeline_with_retry in DepthMapGenerator."""
 

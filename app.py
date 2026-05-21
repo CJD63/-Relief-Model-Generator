@@ -12,10 +12,6 @@ from datetime import datetime
 from relief import ReliefGenerator
 from depth import DepthMapGenerator
 
-# Suppress transformers __path__ deprecation warnings that spam the console
-import warnings
-warnings.filterwarnings("ignore", message="Accessing `__path__`")
-
 # Page config
 st.set_page_config(
     page_title='3D Relief Model Generator',
@@ -283,6 +279,16 @@ AI_MODELS = {
     'Intel/dpt-hybrid-midas': {'label': 'DPT-Hybrid (MiDaS)', 'size': '~500 MB', 'speed': '🐢 Slower'},
 }
 
+# Cached pipeline loader — prevents model reload on every Streamlit rerun
+@st.cache_resource
+def _cached_load_pipeline(model_name: str, device: int):
+    '''Cached wrapper for _load_pipeline_with_retry.
+    
+    Streamlit's cache_resource persists the loaded pipeline across reruns,
+    so the AI model is only downloaded/loaded once per session.
+    '''
+    return DepthMapGenerator._load_pipeline_with_retry(model_name, device=device)
+
 
 # Session state
 if 'depth_image' not in st.session_state:
@@ -369,6 +375,13 @@ if 'comparison_grayscale' not in st.session_state:
     st.session_state.comparison_grayscale = None
 if 'comparison_ai' not in st.session_state:
     st.session_state.comparison_ai = None
+if 'debug_mode' not in st.session_state:
+    st.session_state.debug_mode = False
+
+# Suppress transformers __path__ deprecation warnings (unless debug mode)
+import warnings
+if not st.session_state.debug_mode:
+    warnings.filterwarnings("ignore", message="Accessing `__path__`")
 
 # HEADER
 st.markdown('''
@@ -766,6 +779,11 @@ with tab_single:
                      'Produces more accurate height maps than simple grayscale conversion, especially for photos. '
                      'First run will download the model (~100-400 MB).')
             st.session_state.use_ai_depth = use_ai_depth
+
+            debug_mode = st.checkbox('🐛 Debug Mode', value=st.session_state.debug_mode,
+                help='When enabled, shows all deprecation warnings and verbose logs from libraries like transformers. '
+                     'Useful for troubleshooting but produces noisy console output.')
+            st.session_state.debug_mode = debug_mode
             
             ai_model_name = 'depth-anything/Depth-Anything-V2-Small-hf'
             ai_device = None
@@ -991,6 +1009,16 @@ with tab_single:
                         def progress(pct, msg):
                             progress_bar.progress(int(pct * 100))
                             progress_status.text(msg + ' (' + str(int(pct*100)) + '%)')
+
+                        # Pre-warm the pipeline cache via Streamlit's cache_resource
+                        # so the model persists across reruns without reloading
+                        if use_ai_depth:
+                            _dev = -1 if ai_device is None or ai_device == 'cpu' else 0
+                            progress(0.01, 'Warming pipeline cache...')
+                            # Populate module-level cache so _load_pipeline_with_retry
+                            # skips loading when called later in process_single_image
+                            from depth import _pipeline_cache
+                            _pipeline_cache[(ai_model_name, _dev)] = _cached_load_pipeline(ai_model_name, _dev)
                         
                         generator = process_single_image(
                             image, preset, enable_edge_detection, edge_strength, invert_colors,
