@@ -1042,8 +1042,20 @@ with tab_single:
                         elif use_ai_depth and image.mode != 'RGB':
                             image = image.convert('RGB')
                         
-                        # Compute device early so progress callback can show GPU memory info
-                        _dev = -1 if (not use_ai_depth or ai_device is None or ai_device == 'cpu') else 0
+                        # Compute device early so progress callback can show GPU memory info.
+                        # Must match the resolution logic in _load_pipeline_with_retry so that
+                        # auto-detect mode correctly shows GPU usage when CUDA is available.
+                        _dev = -1
+                        if use_ai_depth:
+                            if ai_device == 'cuda':
+                                _dev = 0
+                            elif ai_device is None:  # auto-detect
+                                try:
+                                    import torch
+                                    if torch.cuda.is_available():
+                                        _dev = 0
+                                except ImportError:
+                                    pass
 
                         def progress(pct, msg):
                             progress_bar.progress(int(pct * 100))
@@ -1120,7 +1132,9 @@ with tab_single:
                 st.session_state.status_kind = 'info'
                 st.rerun()
 
-        # Keyboard shortcut: Ctrl+Enter triggers Generate Relief Model
+        # Keyboard shortcut: Ctrl+Enter triggers Generate Relief Model.
+        # Uses button[kind="primary"] selector — on this tab, the only primary
+        # button is 'Generate Relief Model', so no fragile textContent search.
         st.markdown('''
         <script>
         (function() {
@@ -1128,13 +1142,10 @@ with tab_single:
             window._codebuffShortcutBound = true;
             document.addEventListener('keydown', function(e) {
                 if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                    var buttons = document.querySelectorAll('button');
-                    for (var i = 0; i < buttons.length; i++) {
-                        if (buttons[i].textContent.includes('Generate Relief Model')) {
-                            buttons[i].click();
-                            e.preventDefault();
-                            break;
-                        }
+                    var btn = document.querySelector('button[kind="primary"]');
+                    if (btn) {
+                        btn.click();
+                        e.preventDefault();
                     }
                 }
             });
