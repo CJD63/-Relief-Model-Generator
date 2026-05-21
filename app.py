@@ -377,11 +377,42 @@ if 'comparison_ai' not in st.session_state:
     st.session_state.comparison_ai = None
 if 'debug_mode' not in st.session_state:
     st.session_state.debug_mode = False
+if 'auto_warmup_model' not in st.session_state:
+    st.session_state.auto_warmup_model = False
+if 'model_warmed_up' not in st.session_state:
+    st.session_state.model_warmed_up = False
 
 # Suppress transformers __path__ deprecation warnings (unless debug mode)
 import warnings
 if not st.session_state.debug_mode:
     warnings.filterwarnings("ignore", message="Accessing `__path__`")
+
+# Auto-warmup the AI model on startup if enabled (runs once per session)
+if st.session_state.auto_warmup_model and not st.session_state.model_warmed_up:
+    warmup_model = 'depth-anything/Depth-Anything-V2-Small-hf'
+    warmup_device = -1  # default to CPU for startup warmup; user can override later
+    try:
+        import torch
+        if torch.cuda.is_available():
+            warmup_device = 0
+    except ImportError:
+        pass
+    with st.spinner('🔥 Warming up AI model on startup...'):
+        try:
+            pipe = _cached_load_pipeline(warmup_model, warmup_device)
+            from depth import _pipeline_cache
+            _pipeline_cache[(warmup_model, warmup_device)] = pipe
+            st.session_state.model_warmed_up = True
+            st.rerun()
+        except Exception as e:
+            st.session_state._warmup_info = 'AI model warmup skipped (will load on first use): ' + str(e)[:100]
+            st.session_state.model_warmed_up = True
+            st.rerun()
+
+# Show warmup result after rerun (appears on the page, not before rerun flash)
+if st.session_state.get('_warmup_info'):
+    st.info(st.session_state._warmup_info)
+    del st.session_state._warmup_info
 
 # HEADER
 st.markdown('''
@@ -784,6 +815,11 @@ with tab_single:
                 help='When enabled, shows all deprecation warnings and verbose logs from libraries like transformers. '
                      'Useful for troubleshooting but produces noisy console output.')
             st.session_state.debug_mode = debug_mode
+
+            auto_warmup = st.checkbox('🔥 Auto-load AI Model on Startup', value=st.session_state.auto_warmup_model,
+                help='Pre-load the AI depth model when the app starts so the first generation is instant. '
+                     'Adds a few seconds to startup time but eliminates the download wait later.')
+            st.session_state.auto_warmup_model = auto_warmup
             
             ai_model_name = 'depth-anything/Depth-Anything-V2-Small-hf'
             ai_device = None
@@ -1006,14 +1042,24 @@ with tab_single:
                         elif use_ai_depth and image.mode != 'RGB':
                             image = image.convert('RGB')
                         
+                        # Compute device early so progress callback can show GPU memory info
+                        _dev = -1 if (not use_ai_depth or ai_device is None or ai_device == 'cpu') else 0
+
                         def progress(pct, msg):
                             progress_bar.progress(int(pct * 100))
-                            progress_status.text(msg + ' (' + str(int(pct*100)) + '%)')
+                            display_msg = msg + ' (' + str(int(pct*100)) + '%)'
+                            if use_ai_depth and _dev >= 0:
+                                try:
+                                    import torch
+                                    free_mem, total_mem = torch.cuda.mem_get_info(_dev)
+                                    display_msg += ' | GPU: {:.1f}/{:.1f} GB'.format(free_mem/1e9, total_mem/1e9)
+                                except Exception:
+                                    pass
+                            progress_status.text(display_msg)
 
                         # Pre-warm the pipeline cache via Streamlit's cache_resource
                         # so the model persists across reruns without reloading
                         if use_ai_depth:
-                            _dev = -1 if ai_device is None or ai_device == 'cpu' else 0
                             progress(0.01, 'Warming pipeline cache...')
                             # Populate module-level cache so _load_pipeline_with_retry
                             # skips loading when called later in process_single_image
@@ -1073,6 +1119,28 @@ with tab_single:
                 st.session_state.status_text = 'Waiting for input…'
                 st.session_state.status_kind = 'info'
                 st.rerun()
+
+        # Keyboard shortcut: Ctrl+Enter triggers Generate Relief Model
+        st.markdown('''
+        <script>
+        (function() {
+            if (window._codebuffShortcutBound) return;
+            window._codebuffShortcutBound = true;
+            document.addEventListener('keydown', function(e) {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                    var buttons = document.querySelectorAll('button');
+                    for (var i = 0; i < buttons.length; i++) {
+                        if (buttons[i].textContent.includes('Generate Relief Model')) {
+                            buttons[i].click();
+                            e.preventDefault();
+                            break;
+                        }
+                    }
+                }
+            });
+        })();
+        </script>
+        ''', unsafe_allow_html=True)
         
         st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
         
