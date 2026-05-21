@@ -10,6 +10,7 @@ from PIL import Image
 from io import BytesIO
 from datetime import datetime
 from relief import ReliefGenerator
+from depth import DepthMapGenerator
 
 # Page config
 st.set_page_config(
@@ -240,25 +241,43 @@ def status_html(text: str, kind: str = 'info') -> str:
     return '<div class=\"status-box' + css_class + '\">' + text + '</div>'
 
 
-def process_single_image(image, preset, enable_edge_detection, edge_strength, invert_colors, model_params, progress_callback=None):
+def process_single_image(image, preset, enable_edge_detection, edge_strength, invert_colors, model_params, progress_callback=None, use_ai_depth=False, ai_model_name='depth-anything/Depth-Anything-V2-Small-hf', ai_device=None):
     generator = ReliefGenerator()
     generator.load_image_from_pil(image, max_size=preset['max_size'])
-    generator.create_depth_map(
-        invert_depth=invert_colors,
-        blur_radius=preset['blur'],
-        gamma=preset['gamma'],
-        enable_hill_removal=True,
-        hill_removal_strength=preset['hill'],
-        enable_edge_detection=enable_edge_detection,
-        edge_strength=edge_strength,
-        progress_callback=progress_callback
-    )
+    if use_ai_depth:
+        generator.create_ai_depth_map(
+            model_name=ai_model_name,
+            invert_depth=invert_colors,
+            blur_radius=preset['blur'],
+            gamma=preset['gamma'],
+            progress_callback=progress_callback,
+            device=ai_device
+        )
+    else:
+        generator.create_depth_map(
+            invert_depth=invert_colors,
+            blur_radius=preset['blur'],
+            gamma=preset['gamma'],
+            enable_hill_removal=True,
+            hill_removal_strength=preset['hill'],
+            enable_edge_detection=enable_edge_detection,
+            edge_strength=edge_strength,
+            progress_callback=progress_callback
+        )
     generator.create_relief_mesh(
         model_width=model_params['width'],
         model_thickness=model_params['thickness'],
         base_thickness=model_params['base']
     )
     return generator
+
+
+# AI model metadata (used by both single-image and batch tabs)
+AI_MODELS = {
+    'depth-anything/Depth-Anything-V2-Small-hf': {'label': 'Depth Anything V2 Small', 'size': '~100 MB', 'speed': '⚡ Fast'},
+    'depth-anything/Depth-Anything-V2-Base-hf': {'label': 'Depth Anything V2 Base', 'size': '~400 MB', 'speed': '🐢 Slower'},
+    'Intel/dpt-hybrid-midas': {'label': 'DPT-Hybrid (MiDaS)', 'size': '~500 MB', 'speed': '🐢 Slower'},
+}
 
 
 # Session state
@@ -326,6 +345,8 @@ if 'batch_presets' not in st.session_state:
             'invert_colors': False,
             'edge_detection': False,
             'edge_strength': 1.0,
+            'use_ai_depth': False,
+            'ai_model_name': 'depth-anything/Depth-Anything-V2-Small-hf',
             'model_width': 50.0,
             'model_thickness': 5.0,
             'base_thickness': 2.0,
@@ -334,7 +355,16 @@ if 'batch_presets' not in st.session_state:
     }
 if 'current_batch_preset_name' not in st.session_state:
     st.session_state.current_batch_preset_name = 'default'
-
+if 'use_ai_depth' not in st.session_state:
+    st.session_state.use_ai_depth = False
+if 'batch_use_ai_depth' not in st.session_state:
+    st.session_state.batch_use_ai_depth = False
+if 'batch_ai_model_name' not in st.session_state:
+    st.session_state.batch_ai_model_name = 'depth-anything/Depth-Anything-V2-Small-hf'
+if 'comparison_grayscale' not in st.session_state:
+    st.session_state.comparison_grayscale = None
+if 'comparison_ai' not in st.session_state:
+    st.session_state.comparison_ai = None
 
 # HEADER
 st.markdown('''
@@ -727,6 +757,59 @@ with tab_single:
         st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
         
         with st.expander('⚙️ Advanced Settings'):
+            use_ai_depth = st.checkbox('🧠 AI Depth Estimation', value=st.session_state.use_ai_depth,
+                help='Use deep learning (Depth Anything V2) to estimate true geometric depth from the image. '
+                     'Produces more accurate height maps than simple grayscale conversion, especially for photos. '
+                     'First run will download the model (~100-400 MB).')
+            st.session_state.use_ai_depth = use_ai_depth
+            
+            ai_model_name = 'depth-anything/Depth-Anything-V2-Small-hf'
+            ai_device = None
+            if use_ai_depth:
+                ai_model_choice = st.selectbox(
+                    'AI Model',
+                    list(AI_MODELS.keys()),
+                    index=0,
+                    format_func=lambda m: f"{AI_MODELS[m]['label']} ({AI_MODELS[m]['size']}, {AI_MODELS[m]['speed']})",
+                    help='Small: fastest, ~100MB. Base: better quality, ~400MB. DPT-Hybrid: classic MiDaS, ~500MB.'
+                )
+                ai_model_name = ai_model_choice
+                ai_device = st.selectbox(
+                    '💻 Compute Device',
+                    ['auto', 'cpu', 'cuda'],
+                    index=0,
+                    format_func=lambda d: {'auto': 'Auto-detect (CUDA if available)', 'cpu': 'CPU (slower but always works)', 'cuda': 'CUDA GPU (fastest, needs NVIDIA GPU)'}[d],
+                    help='CUDA requires an NVIDIA GPU with CUDA installed. Auto-detect will use GPU if available.'
+                )
+                if ai_device == 'auto':
+                    ai_device = None
+                st.caption('💡 AI depth estimation works best with RGB photos. For best results, enable "Keep Original Colors".')
+                
+                # Pre-download model button — warms the cache without needing an image
+                pre_col1, pre_col2 = st.columns([1, 1])
+                with pre_col1:
+                    cached = DepthMapGenerator._is_model_cached(ai_model_name)
+                    cache_label = '✅ Model cached — click to re-download' if cached else '📥 Pre-download AI Model'
+                    if st.button(cache_label, use_container_width=True,
+                                 help='Download the AI model now so the first generation is instant. '
+                                      'Useful for preparing before uploading images.'):
+                        dl_progress = st.progress(0)
+                        dl_status = st.empty()
+                        try:
+                            def dl_cb(pct, msg):
+                                dl_progress.progress(int(pct * 100))
+                                dl_status.text(msg + ' (' + str(int(pct * 100)) + '%)')
+                            DepthMapGenerator._load_pipeline_with_retry(
+                                ai_model_name, device=-1 if ai_device is None or ai_device == 'cpu' else 0,
+                                progress_callback=dl_cb
+                            )
+                            dl_progress.progress(100)
+                            dl_status.text('✅ Model downloaded and cached!')
+                            st.success('AI model cached successfully. First use will now be instant!')
+                        except Exception as e:
+                            dl_status.text('❌ Error: ' + str(e))
+                            st.error('Failed to download model: ' + str(e))
+            
             invert_colors = st.checkbox('🔄 Invert Colors (Black ↔ White)', value=False,
                 help='Swap black and white. Use this if your image has dark background and light foreground, or vice versa.')
             
@@ -739,6 +822,124 @@ with tab_single:
             model_width = st.slider('Model Width (mm)', 10.0, 200.0, 50.0, 5.0)
             model_thickness = st.slider('Relief Height (mm)', 1.0, 20.0, 5.0, 0.5)
             base_thickness = st.slider('Base Thickness (mm)', 0.5, 10.0, 2.0, 0.5)
+            
+            # Quick Preview: generate only the depth map (no STL) to preview AI depth
+            st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
+            if st.button('👁️ Quick Preview (Depth Map Only)', use_container_width=True,
+                         help='Generates only the depth map preview without creating the full STL model. '
+                              'Useful for quickly iterating on AI depth settings.'):
+                if uploaded_file is None and not url_input.strip():
+                    st.error('Please upload an image or enter a URL first')
+                else:
+                    qp_progress = st.progress(0)
+                    qp_status = st.empty()
+                    try:
+                        # Compute preset locally — it's defined after the expander in script order
+                        qp_preset = preset_info.get(st.session_state.get('preset', 'preview'), preset_info['preview'])
+                        if st.session_state.original_image is not None:
+                            image = st.session_state.original_image.copy()
+                        else:
+                            image, err = get_image(uploaded_file, url_input, keep_colors=use_ai_depth)
+                            if err:
+                                st.error(err)
+                                st.stop()
+                        image = apply_image_adjustments(image, brightness, contrast, saturation, sharpness)
+                        if use_ai_depth and image.mode != 'RGB':
+                            image = image.convert('RGB')
+                        elif not use_ai_depth and not keep_colors and image.mode != 'L':
+                            image = image.convert('L')
+                        
+                        def qp_progress_cb(pct, msg):
+                            qp_progress.progress(int(pct * 100))
+                            qp_status.text(msg + ' (' + str(int(pct * 100)) + '%)')
+                        
+                        gen = ReliefGenerator()
+                        gen.load_image_from_pil(image, max_size=qp_preset['max_size'])
+                        if use_ai_depth:
+                            gen.create_ai_depth_map(
+                                model_name=ai_model_name, invert_depth=invert_colors,
+                                blur_radius=qp_preset['blur'], gamma=qp_preset['gamma'],
+                                progress_callback=qp_progress_cb, device=ai_device
+                            )
+                        else:
+                            gen.create_depth_map(
+                                invert_depth=invert_colors, blur_radius=qp_preset['blur'],
+                                gamma=qp_preset['gamma'], enable_hill_removal=True,
+                                hill_removal_strength=qp_preset['hill'],
+                                enable_edge_detection=enable_edge_detection,
+                                edge_strength=edge_strength,
+                                progress_callback=qp_progress_cb
+                            )
+                        st.session_state.depth_image = gen.get_depth_map_image()
+                        qp_progress.progress(100)
+                        qp_status.text('✅ Depth preview ready!')
+                        st.session_state.status_text = '✅ Depth preview ready! Adjust settings and click Generate for STL.'
+                        st.session_state.status_kind = 'success'
+                        st.rerun()
+                    except Exception as e:
+                        qp_status.text('❌ Error: ' + str(e))
+                        st.error(str(e))
+            
+            # Depth Map Comparison: generate both grayscale and AI depth maps side by side
+            if use_ai_depth:
+                st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+                if st.button('📊 Compare Grayscale vs AI Depth', use_container_width=True,
+                             help='Generates both the traditional grayscale depth map and the AI depth map '
+                                  'side by side so you can compare the results.'):
+                    if uploaded_file is None and not url_input.strip():
+                        st.error('Please upload an image or enter a URL first')
+                    else:
+                        cmp_progress = st.progress(0)
+                        cmp_status = st.empty()
+                        try:
+                            cmp_preset = preset_info.get(st.session_state.get('preset', 'preview'), preset_info['preview'])
+                            if st.session_state.original_image is not None:
+                                image = st.session_state.original_image.copy()
+                            else:
+                                image, err = get_image(uploaded_file, url_input, keep_colors=True)
+                                if err:
+                                    st.error(err)
+                                    st.stop()
+                            image = apply_image_adjustments(image, brightness, contrast, saturation, sharpness)
+                            if image.mode != 'RGB':
+                                image = image.convert('RGB')
+                            
+                            # Step 1: Generate grayscale depth map
+                            cmp_status.text('Generating grayscale depth map...')
+                            cmp_progress.progress(10)
+                            gen_gray = ReliefGenerator()
+                            gray_img = image.copy().convert('L')
+                            gen_gray.load_image_from_pil(gray_img, max_size=cmp_preset['max_size'])
+                            gen_gray.create_depth_map(
+                                invert_depth=invert_colors, blur_radius=cmp_preset['blur'],
+                                gamma=cmp_preset['gamma'], enable_hill_removal=True,
+                                hill_removal_strength=cmp_preset['hill'],
+                                enable_edge_detection=enable_edge_detection,
+                                edge_strength=edge_strength
+                            )
+                            st.session_state.comparison_grayscale = gen_gray.get_depth_map_image()
+                            cmp_progress.progress(60)
+                            
+                            # Step 2: Generate AI depth map
+                            cmp_status.text('Generating AI depth map...')
+                            gen_ai = ReliefGenerator()
+                            gen_ai.load_image_from_pil(image, max_size=cmp_preset['max_size'])
+                            gen_ai.create_ai_depth_map(
+                                model_name=ai_model_name, invert_depth=invert_colors,
+                                blur_radius=cmp_preset['blur'], gamma=cmp_preset['gamma'],
+                                device=ai_device
+                            )
+                            st.session_state.comparison_ai = gen_ai.get_depth_map_image()
+                            # Also set the AI depth as the main preview
+                            st.session_state.depth_image = st.session_state.comparison_ai
+                            cmp_progress.progress(100)
+                            cmp_status.text('✅ Comparison ready!')
+                            st.session_state.status_text = '✅ Grayscale vs AI depth comparison ready!'
+                            st.session_state.status_kind = 'success'
+                            st.rerun()
+                        except Exception as e:
+                            cmp_status.text('❌ Error: ' + str(e))
+                            st.error('Comparison failed: ' + str(e))
         
         st.markdown('<div class=\"thin-divider\"></div>', unsafe_allow_html=True)
         
@@ -750,81 +951,87 @@ with tab_single:
                 if uploaded_file is None and not url_input.strip():
                     st.error('Please upload an image or enter a URL')
                 else:
-                    with st.spinner('Processing image...'):
+                    progress_bar = st.progress(0)
+                    progress_status = st.empty()
+                    try:
+                        # Use the stored original image if available (avoids re-reading file)
+                        # Note: original_image already has rotation and crop applied in preview section
+                        if st.session_state.original_image is not None:
+                            image = st.session_state.original_image.copy()
+                        else:
+                            image, err = get_image(uploaded_file, url_input, keep_colors=use_ai_depth)
+                            if err:
+                                st.error(err)
+                                st.stop()
+                            # Apply rotation and crop if needed for fallback path
+                            if st.session_state.rotation != 0:
+                                image = image.rotate(st.session_state.rotation, expand=True)
+                            if st.session_state.crop_enabled:
+                                w, h = image.size
+                                top_px = int(h * st.session_state.crop_top / 100)
+                                bottom_px = int(h * st.session_state.crop_bottom / 100)
+                                left_px = int(w * st.session_state.crop_left / 100)
+                                right_px = int(w * st.session_state.crop_right / 100)
+                                if bottom_px > top_px and right_px > left_px:
+                                    image = image.crop((left_px, top_px, right_px, bottom_px))
+                        
+                        # Apply image adjustments
+                        image = apply_image_adjustments(image, brightness, contrast, saturation, sharpness)
+                        
+                        # Apply grayscale conversion if keeping colors is disabled AND not using AI depth
+                        if not keep_colors and not use_ai_depth and image.mode != 'L':
+                            image = image.convert('L')
+                        elif use_ai_depth and image.mode != 'RGB':
+                            image = image.convert('RGB')
+                        
+                        def progress(pct, msg):
+                            progress_bar.progress(int(pct * 100))
+                            progress_status.text(msg + ' (' + str(int(pct*100)) + '%)')
+                        
+                        generator = process_single_image(
+                            image, preset, enable_edge_detection, edge_strength, invert_colors,
+                            {'width': model_width, 'thickness': model_thickness, 'base': base_thickness},
+                            progress, use_ai_depth=use_ai_depth, ai_model_name=ai_model_name, ai_device=ai_device
+                        )
+                        
+                        # Save STL to a temporary file and read it
+                        with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp:
+                            temp_path = tmp.name
+                        
+                        # Write STL data
+                        generator.save_stl(temp_path)
+                        
+                        # Capture data before closing handles
+                        depth_img = generator.get_depth_map_image()
+                        mesh_info = generator.get_mesh_info()
+                        
+                        # Read the file data
+                        with open(temp_path, 'rb') as f:
+                            st.session_state.stl_bytes = f.read()
+                        
+                        # Explicitly close all handles before deleting (Windows issue)
+                        f = None
+                        generator = None
+                        
+                        # Delete the temp file
                         try:
-                            # Use the stored original image if available (avoids re-reading file)
-                            # Note: original_image already has rotation and crop applied in preview section
-                            if st.session_state.original_image is not None:
-                                image = st.session_state.original_image.copy()
-                            else:
-                                image, err = get_image(uploaded_file, url_input)
-                                if err:
-                                    st.error(err)
-                                    st.stop()
-                                # Apply rotation and crop if needed for fallback path
-                                if st.session_state.rotation != 0:
-                                    image = image.rotate(st.session_state.rotation, expand=True)
-                                if st.session_state.crop_enabled:
-                                    w, h = image.size
-                                    top_px = int(h * st.session_state.crop_top / 100)
-                                    bottom_px = int(h * st.session_state.crop_bottom / 100)
-                                    left_px = int(w * st.session_state.crop_left / 100)
-                                    right_px = int(w * st.session_state.crop_right / 100)
-                                    if bottom_px > top_px and right_px > left_px:
-                                        image = image.crop((left_px, top_px, right_px, bottom_px))
-                            
-                            # Apply image adjustments
-                            image = apply_image_adjustments(image, brightness, contrast, saturation, sharpness)
-                            
-                            # Apply grayscale conversion if keeping colors is disabled
-                            if not keep_colors and image.mode != 'L':
-                                image = image.convert('L')
-                            
-                            def progress(pct, msg):
-                                st.session_state.status_text = msg + ' (' + str(int(pct*100)) + '%)'
-                                st.session_state.status_kind = 'info'
-                            
-                            generator = process_single_image(
-                                image, preset, enable_edge_detection, edge_strength, invert_colors,
-                                {'width': model_width, 'thickness': model_thickness, 'base': base_thickness},
-                                progress
-                            )
-                            
-                            # Save STL to a temporary file and read it
-                            with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as tmp:
-                                temp_path = tmp.name
-                            
-                            # Write STL data
-                            generator.save_stl(temp_path)
-                            
-                            # Capture data before closing handles
-                            depth_img = generator.get_depth_map_image()
-                            mesh_info = generator.get_mesh_info()
-                            
-                            # Read the file data
-                            with open(temp_path, 'rb') as f:
-                                st.session_state.stl_bytes = f.read()
-                            
-                            # Explicitly close all handles before deleting (Windows issue)
-                            f = None
-                            generator = None
-                            
-                            # Delete the temp file
-                            try:
-                                os.unlink(temp_path)
-                            except OSError:
-                                pass  # File may already be deleted or locked, continue anyway
-                            
-                            st.session_state.preview_done = True
-                            st.session_state.depth_image = depth_img
-                            st.session_state.depth_info = mesh_info
-                            st.session_state.status_text = '✅ Processing complete! Model ready for download.'
-                            st.session_state.status_kind = 'success'
-                            st.rerun()
-                        except Exception as e:
-                            st.session_state.status_text = '❌ Error: ' + str(e)
-                            st.session_state.status_kind = 'error'
-                            st.error(str(e))
+                            os.unlink(temp_path)
+                        except OSError:
+                            pass  # File may already be deleted or locked, continue anyway
+                        
+                        progress_bar.progress(100)
+                        progress_status.text('✅ Processing complete!')
+                        st.session_state.preview_done = True
+                        st.session_state.depth_image = depth_img
+                        st.session_state.depth_info = mesh_info
+                        st.session_state.status_text = '✅ Processing complete! Model ready for download.'
+                        st.session_state.status_kind = 'success'
+                        st.rerun()
+                    except Exception as e:
+                        progress_status.text('❌ Error: ' + str(e))
+                        st.session_state.status_text = '❌ Error: ' + str(e)
+                        st.session_state.status_kind = 'error'
+                        st.error(str(e))
         
         with generate_col2:
             if st.button('🗑️ Clear', use_container_width=True):
@@ -845,6 +1052,33 @@ with tab_single:
         
         if st.session_state.depth_image is not None:
             st.image(st.session_state.depth_image, caption='Depth Map Preview', use_container_width=True)
+            
+            # Show side-by-side comparison if both grayscale and AI depth are available
+            if st.session_state.comparison_grayscale is not None and st.session_state.comparison_ai is not None:
+                st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+                st.markdown('#### 📊 Grayscale vs AI Depth Comparison')
+                cmp_col1, cmp_col2 = st.columns(2)
+                with cmp_col1:
+                    st.image(st.session_state.comparison_grayscale, caption='Grayscale Depth Map', use_container_width=True)
+                with cmp_col2:
+                    st.image(st.session_state.comparison_ai, caption='AI Depth Map', use_container_width=True)
+                if st.button('🗑️ Clear Comparison', key='clear_comparison'):
+                    st.session_state.comparison_grayscale = None
+                    st.session_state.comparison_ai = None
+                    st.rerun()
+                st.markdown('<div class="thin-divider"></div>', unsafe_allow_html=True)
+            
+            # Depth map PNG download
+            depth_buf = BytesIO()
+            st.session_state.depth_image.save(depth_buf, format='PNG')
+            st.download_button(
+                label='⬇️ Download Depth Map (PNG)',
+                data=depth_buf.getvalue(),
+                file_name='depth_map.png',
+                mime='image/png',
+                use_container_width=True,
+                key='download_depth_png',
+            )
             
             if st.session_state.depth_info:
                 info = st.session_state.depth_info
@@ -914,6 +1148,8 @@ with tab_batch:
             st.session_state.batch_invert_colors = bp.get('invert_colors', False)
             st.session_state.batch_edge_detection = bp.get('edge_detection', False)
             st.session_state.batch_edge_strength = bp.get('edge_strength', 1.0)
+            st.session_state.batch_use_ai_depth = bp.get('use_ai_depth', False)
+            st.session_state.batch_ai_model_name = bp.get('ai_model_name', 'depth-anything/Depth-Anything-V2-Small-hf')
             st.session_state.batch_model_width = bp.get('model_width', 50.0)
             st.session_state.batch_model_thickness = bp.get('model_thickness', 5.0)
             st.session_state.batch_base_thickness = bp.get('base_thickness', 2.0)
@@ -930,6 +1166,8 @@ with tab_batch:
                 'invert_colors': st.session_state.get('batch_invert_colors', False),
                 'edge_detection': st.session_state.get('batch_edge_detection', False),
                 'edge_strength': st.session_state.get('batch_edge_strength', 1.0),
+                'use_ai_depth': st.session_state.get('batch_use_ai_depth', False),
+                'ai_model_name': st.session_state.get('batch_ai_model_name', 'depth-anything/Depth-Anything-V2-Small-hf'),
                 'model_width': st.session_state.get('batch_model_width', 50.0),
                 'model_thickness': st.session_state.get('batch_model_thickness', 5.0),
                 'base_thickness': st.session_state.get('batch_base_thickness', 2.0),
@@ -974,6 +1212,7 @@ with tab_batch:
                             valid = False
                             break
                         required_keys = ['preset', 'keep_colors', 'invert_colors', 'edge_detection', 'model_width', 'model_thickness', 'base_thickness']
+                        optional_keys = ['edge_strength', 'use_ai_depth', 'ai_model_name', 'filename_pattern']
                         for key in required_keys:
                             if key not in preset:
                                 valid = False
@@ -1018,6 +1257,37 @@ with tab_batch:
         help='Swap black and white in all images')
     batch_edge_detection = st.checkbox('🔍 Enable Edge Detection', value=current_bp.get('edge_detection', False), key='batch_edge_detection')
     batch_edge_strength = st.slider('Edge Strength', 0.1, 2.0, current_bp.get('edge_strength', 1.0), 0.1, key='batch_edge_strength') if batch_edge_detection else 1.0
+    
+    batch_use_ai_depth = st.checkbox('🧠 AI Depth Estimation', value=st.session_state.batch_use_ai_depth, key='batch_use_ai_depth',
+        help='Use deep learning for true geometric depth estimation. First run downloads the model.')
+    batch_ai_model_name = st.session_state.batch_ai_model_name
+    batch_ai_device = None
+    if batch_use_ai_depth:
+        batch_ai_model_choice = st.selectbox(
+            'AI Model',
+            list(AI_MODELS.keys()),
+            index=0,
+            format_func=lambda m: f"{AI_MODELS[m]['label']} ({AI_MODELS[m]['size']}, {AI_MODELS[m]['speed']})",
+            key='batch_ai_model_selector',
+            help='Small: fastest, ~100MB. Base: better quality, ~400MB. DPT-Hybrid: classic MiDaS, ~500MB.'
+        )
+        batch_ai_model_name = batch_ai_model_choice
+        st.session_state.batch_ai_model_name = batch_ai_model_name
+        batch_device_choice = st.selectbox(
+            '💻 Compute Device',
+            ['auto', 'cpu', 'cuda'],
+            index=0,
+            format_func=lambda d: {'auto': 'Auto-detect (CUDA if available)', 'cpu': 'CPU (slower but always works)', 'cuda': 'CUDA GPU (fastest, needs NVIDIA GPU)'}[d],
+            key='batch_ai_device_selector',
+            help='CUDA requires an NVIDIA GPU with CUDA installed.'
+        )
+        if batch_device_choice == 'auto':
+            batch_ai_device = None
+        elif batch_device_choice == 'cuda':
+            batch_ai_device = 'cuda'
+        else:
+            batch_ai_device = 'cpu'
+        st.caption('💡 AI depth estimation works best with RGB photos. Enable "Keep Original Colors" for best results.')
     
     batch_model_width = st.slider('Model Width (mm)', 10.0, 200.0, current_bp.get('model_width', 50.0), 5.0, key='batch_model_width')
     batch_model_thickness = st.slider('Relief Height (mm)', 1.0, 20.0, current_bp.get('model_thickness', 5.0), 0.5, key='batch_model_thickness')
@@ -1105,6 +1375,30 @@ with tab_batch:
                 mime='application/zip',
                 use_container_width=True,
             )
+            
+            # Depth maps ZIP download
+            depth_maps_available = any(r.get('depth_png') for r in results if r['status'] == 'success')
+            if depth_maps_available:
+                depth_zip_buffer = BytesIO()
+                with zipfile.ZipFile(depth_zip_buffer, 'w', zipfile.ZIP_DEFLATED) as dzf:
+                    for idx, result in enumerate(results):
+                        if result['status'] == 'success' and result.get('depth_png'):
+                            name_parts = result['name'].rsplit('.', 1)
+                            base_name = name_parts[0] if len(name_parts) > 1 else result['name']
+                            png_name = filename_pattern.format(
+                                name=base_name, preset=batch_preset, index=idx+1,
+                                date=now.strftime('%Y%m%d'), timestamp=now.strftime('%Y%m%d_%H%M%S'),
+                                width=0, height=0
+                            ) + '.png'
+                            dzf.writestr(png_name, result['depth_png'])
+                depth_zip_buffer.seek(0)
+                st.download_button(
+                    label='🖼️ Download All Depth Maps (' + str(sum(1 for r in results if r.get('depth_png'))) + ' PNGs)',
+                    data=depth_zip_buffer.getvalue(),
+                    file_name='depth_maps_batch.zip',
+                    mime='application/zip',
+                    use_container_width=True,
+                )
 
     # Batch Processing Loop
     if process_batch and batch_files:
@@ -1133,17 +1427,20 @@ with tab_batch:
                 image = Image.open(uploaded_file)
                 image.load()
                 
-                # Convert to grayscale only if not keeping original colors
-                if not batch_keep_colors and image.mode != 'L':
+                # Convert to grayscale only if not keeping original colors AND not using AI depth
+                if not batch_keep_colors and not batch_use_ai_depth and image.mode != 'L':
                     image = image.convert('L')
+                elif batch_use_ai_depth and image.mode != 'RGB':
+                    image = image.convert('RGB')
                 
                 generator = process_single_image(
                     image, batch_preset_info, batch_edge_detection, batch_edge_strength, batch_invert_colors,
                     {'width': batch_model_width, 'thickness': batch_model_thickness, 'base': batch_base_thickness},
-                    None
+                    None, use_ai_depth=batch_use_ai_depth, ai_model_name=batch_ai_model_name, ai_device=batch_ai_device
                 )
                 
                 mesh_info = generator.get_mesh_info()
+                depth_map_img = generator.get_depth_map_image()
                 
                 with tempfile.NamedTemporaryFile(suffix='.stl', delete=False) as f:
                     temp_path = f.name
@@ -1155,12 +1452,18 @@ with tab_batch:
                 
                 os.unlink(temp_path)
                 
+                # Save depth map as PNG bytes for batch download
+                depth_buf = BytesIO()
+                depth_map_img.save(depth_buf, format='PNG')
+                depth_png_bytes = depth_buf.getvalue()
+                
                 item_elapsed = time.time() - item_start
                 
                 st.session_state.batch_results.append({
                     'name': uploaded_file.name,
                     'status': 'success',
                     'data': stl_data,
+                    'depth_png': depth_png_bytes,
                     'size': len(stl_data),
                     'elapsed': item_elapsed,
                     'mesh_info': mesh_info,

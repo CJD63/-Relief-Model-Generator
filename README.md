@@ -16,18 +16,24 @@ Generate 3D STL relief models from images using AI-powered edge detection and cu
 
 ## Quick Start
 
-### Option 1: Launch Script (Windows)
+### Set up 
 
-Simply double-click `3D Relief Model Generator.bat` to start the application.
-
-### Option 2: Command Line
-
-```bash
-# Install dependencies
+Python -m venv venv
+venv\scripts\activate
 pip install -r requirements.txt
+
 
 # Run the application
 python -m streamlit run app.py
+
+
+Then open your browser at http://localhost:8501
+
+## Alternative application run after python environment installed.
+
+Simply double-click `3D Relief Model Generator.bat` to start the application.
+
+
 ```
 
 Then open your browser at **http://localhost:8501**

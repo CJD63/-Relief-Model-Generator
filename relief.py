@@ -118,6 +118,40 @@ class ReliefGenerator:
             progress_callback=progress_callback
         )
 
+    def create_ai_depth_map(
+        self,
+        model_name: str = 'depth-anything/Depth-Anything-V2-Small-hf',
+        invert_depth: bool = False,
+        blur_radius: float = 0.5,
+        gamma: float = 1.0,
+        progress_callback=None,
+        device: Optional[str] = None
+    ) -> np.ndarray:
+        '''
+        Generate a true depth map using AI-based monocular depth estimation.
+
+        Uses a Hugging Face depth estimation model to predict geometric depth
+        from a single RGB image, producing a proper height map.
+
+        Args:
+            model_name: Hugging Face model ID
+            invert_depth: Swap raised/recessed areas
+            blur_radius: Post-process smoothing strength
+            gamma: Contrast adjustment
+            progress_callback: Optional callback(percent, message) for progress
+
+        Returns:
+            Depth map as uint8 array
+        '''
+        return self._depth_gen.create_ai_depth_map(
+            model_name=model_name,
+            invert=invert_depth,
+            blur_radius=blur_radius,
+            gamma=gamma,
+            progress_callback=progress_callback,
+            device=device
+        )
+
     def get_depth_map_image(self) -> Image.Image:
         '''Return depth map as PIL Image.'''
         dm = self._depth_gen.get_depth_map_image()
